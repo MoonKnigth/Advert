@@ -77,8 +77,8 @@ const Login = () => {
         const expiresIn = data.data.expires_in
         const refreshTokenExpiresAt = data.data.refresh_token_expires_at
 
-        // ✅ เรียก device info
-        const deviceRes = await fetch('/api/auth/device', {
+        // ✅ เรียกข้อมูลจาก API /api/auth/schedule-assignments
+        const scheduleAssignmentsRes = await fetch('/api/auth/schedule-assignments', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -86,20 +86,20 @@ const Login = () => {
           }
         })
 
-        const deviceText = await deviceRes.text()
-        let deviceData: any
+        const scheduleAssignmentsText = await scheduleAssignmentsRes.text()
+        let scheduleAssignmentsData: any
         try {
-          deviceData = JSON.parse(deviceText)
+          scheduleAssignmentsData = JSON.parse(scheduleAssignmentsText)
         } catch (e) {
-          throw new Error('Invalid JSON response from device API')
+          throw new Error('Invalid JSON response from schedule assignments API')
         }
 
-        if (!deviceRes.ok || !deviceData?.success) {
-          console.warn('Device API warning:', deviceData?.message)
+        if (!scheduleAssignmentsRes.ok || !scheduleAssignmentsData?.success) {
+          console.warn('Schedule assignments API warning:', scheduleAssignmentsData?.message)
         } else {
-          console.log('Device Info:', deviceData.data)
-          // 👉 ถ้าต้องการเก็บไว้:
-          localStorage.setItem('deviceInfo', JSON.stringify(deviceData.data))
+          console.log('Schedule Assignments Data:', scheduleAssignmentsData.data)
+          // 👉 ถ้าต้องการเก็บข้อมูลจาก API:
+          localStorage.setItem('scheduleAssignmentsData', JSON.stringify(scheduleAssignmentsData.data))
         }
 
         // ✅ ตั้ง cookies

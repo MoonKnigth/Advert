@@ -16,6 +16,8 @@ import IconButton from '@mui/material/IconButton'
 import DirectionalIcon from '@components/DirectionalIcon'
 import { Avatar, Box, Card, Divider, Container, CardContent } from '@mui/material'
 import { Icon } from '@iconify/react'
+import axios from 'axios'
+import Cookies from 'js-cookie'
 
 type MediaItem = {
   id: number
@@ -36,6 +38,18 @@ interface UploadedFile {
   type: string
   preview?: string
   url?: string
+  comments?: string
+}
+
+// เพิ่ม interface สำหรับ schedule item
+interface ScheduleItem {
+  id: number
+  type: string
+  set_time: boolean
+  set_date: boolean
+  ad_run_at: string
+  ad_run_at_to: string
+  duration?: number
 }
 
 type Props = {
@@ -46,11 +60,13 @@ type Props = {
   isInternal?: boolean
   orientation: 'landscape' | 'portrait'
   selectedOldFiles: MediaItem[]
-  // ✅ เพิ่ม props สำหรับรับข้อมูลจาก StepPropertyDetails
   adName: string
   adDescription: string
   uploadedFiles: UploadedFile[]
   setUploadedFiles: React.Dispatch<React.SetStateAction<UploadedFile[]>>
+  startDateTime: Date | null
+  endDateTime: Date | null
+  selectedDeviceIds: string[]
 }
 
 const StepPropertyFeatures = ({
@@ -61,11 +77,13 @@ const StepPropertyFeatures = ({
   isInternal = true,
   orientation,
   selectedOldFiles,
-  // ✅ รับข้อมูลใหม่
   adName,
   adDescription,
   uploadedFiles,
-  setUploadedFiles
+  setUploadedFiles,
+  startDateTime,
+  endDateTime,
+  selectedDeviceIds
 }: Props) => {
   // States
   const [videoDialogOpen, setVideoDialogOpen] = useState(false)
@@ -78,11 +96,12 @@ const StepPropertyFeatures = ({
   useEffect(() => {
     console.log('✅ Data received in StepPropertyFeatures:')
     console.log('Orientation:', orientation)
-    console.log('Ad Name:', adName)
-    console.log('Ad Description:', adDescription)
+    console.log('Schedule Name:', adName)
+    console.log('Schedule Description:', adDescription)
     console.log('Uploaded Files:', uploadedFiles)
     console.log('Selected Old Files:', selectedOldFiles)
-  }, [orientation, adName, adDescription, uploadedFiles, selectedOldFiles])
+    console.log('deviceselect', selectedDeviceIds)
+  }, [orientation, adName, adDescription, uploadedFiles, selectedOldFiles, selectedDeviceIds])
 
   // แก้ไข useEffect สำหรับการสร้าง thumbnail และ URL
   useEffect(() => {
@@ -122,13 +141,6 @@ const StepPropertyFeatures = ({
         })
       }
     })
-
-    // ✅ ลบ cleanup ที่ revoke URL ออก เพื่อให้สามารถเล่นวิดีโอได้
-    // return () => {
-    //   urlsToRevoke.forEach(url => {
-    //     URL.revokeObjectURL(url)
-    //   })
-    // }
   }, [uploadedFiles, setUploadedFiles])
 
   // ✅ เพิ่ม cleanup เฉพาะเมื่อ component unmount
@@ -202,6 +214,454 @@ const StepPropertyFeatures = ({
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
   }
 
+  const checkUploadedFileStatus = async () => {
+    // ✅ เรียกเฉพาะ createScheduleAndAssign ที่จะทำทุกอย่างให้
+    await createScheduleAndAssign()
+  }
+
+  // ✅ เพิ่ม loading state เพื่อป้องกันการกดซ้ำ
+  const [isProcessing, setIsProcessing] = useState(false)
+
+  // แก้ไขฟังก์ชัน createScheduleAndAssign ให้มี loading state
+  const createScheduleAndAssign = async () => {
+    if (isProcessing) {
+      alert('กำลังดำเนินการอยู่ กรุณารอสักครู่...')
+      return
+    }
+
+    setIsProcessing(true)
+
+    try {
+      let uploadedFileIds: MediaItem[] = []
+
+      // 📤 Step 1: Upload files (if any)
+      if (uploadedFiles.length > 0) {
+        console.log('📤 Uploading files first...')
+
+        const formData = new FormData()
+        uploadedFiles.forEach((file, index) => {
+          formData.append(`media[${index}].name`, file.name)
+          formData.append(`media[${index}].comments`, file.comments || '')
+          formData.append(`media[${index}].file`, file.file)
+        })
+
+        const uploadRes = await axios.post('/api/auth/upload-media', formData, {
+          headers: {
+            'Content-Type': 'multipart/form-data',
+            Authorization: `Bearer ${Cookies.get('accessToken')}`
+          }
+        })
+
+        if (!uploadRes.data.success) {
+          alert('❌ Upload failed: ' + uploadRes.data.message)
+          return
+        }
+
+        uploadedFileIds = uploadRes.data.data
+        console.log('✅ Files uploaded successfully:', uploadedFileIds.length)
+      }
+
+      // 🧾 Step 2: Prepare schedule items
+      const formatDate = (date: Date) => date.toISOString().split('T')[0]
+      const run_at = startDateTime ? formatDate(startDateTime) : ''
+      const run_at_to = endDateTime ? formatDate(endDateTime) : ''
+
+      const allMediaItems: ScheduleItem[] = []
+
+      // Add new uploaded files
+      uploadedFileIds.forEach(file => {
+        allMediaItems.push({
+          id: file.id,
+          type: file.type,
+          set_time: false,
+          set_date: true,
+          ad_run_at: run_at,
+          ad_run_at_to: run_at_to,
+          duration: file.type === 'image' ? 10 : undefined
+        })
+      })
+
+      // Add selected old files
+      selectedOldFiles.forEach(file => {
+        allMediaItems.push({
+          id: file.id,
+          type: file.type,
+          set_time: false,
+          set_date: true,
+          ad_run_at: run_at,
+          ad_run_at_to: run_at_to,
+          duration: file.type === 'image' ? file.duration || 10 : undefined
+        })
+      })
+
+      if (allMediaItems.length === 0) {
+        alert('❌ ไม่มีไฟล์ที่สามารถใช้สร้าง Schedule ได้')
+        return
+      }
+
+      // 📅 Step 3: Create schedule
+      const normalizeOrientation = (value: string) =>
+        value.toLowerCase() === 'landscape'
+          ? 'horizontal'
+          : value.toLowerCase() === 'portrait'
+            ? 'vertical'
+            : value.toLowerCase()
+
+      const schedulePayload = {
+        name: adName || 'Untitled Schedule',
+        orientation: normalizeOrientation(orientation),
+        run_at,
+        run_at_to,
+        schedule_items: allMediaItems
+      }
+
+      console.log('📤 Creating schedule with payload:', schedulePayload)
+
+      const scheduleRes = await axios.post('/api/proxy/schedules', schedulePayload, {
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      })
+
+      const scheduleResult = scheduleRes.data
+
+      if (!scheduleResult.success) {
+        alert(`❌ สร้าง Schedule ไม่สำเร็จ: ${scheduleResult.message}`)
+        return
+      }
+
+      // 🎯 Get schedule ID from response
+      const scheduleId = scheduleResult.data.id
+      console.log('✅ Schedule Created with ID:', scheduleId)
+      console.log('📋 Schedule Full Data:', scheduleResult.data)
+
+      // ✅ Validate required data before assignment
+      if (!selectedDeviceIds || selectedDeviceIds.length === 0) {
+        alert('❌ ไม่พบ Device ที่เลือกไว้ ไม่สามารถ Assign Schedule ได้')
+        return
+      }
+
+      // 🎯 Step 4: Assign schedule to devices
+      const assignPayload = {
+        devices: selectedDeviceIds, // 👈 จาก props
+        groups: [],
+        schedules: [
+          {
+            id: scheduleId, // 👈 จาก Schedule ที่สร้างเสร็จ
+            group_id: null
+          }
+        ]
+      }
+
+      console.log('📤 Assigning schedule to devices:', assignPayload)
+
+      const assignRes = await axios.post('/api/proxy/schedule-assignments', assignPayload, {
+        headers: {
+          Authorization: `Bearer ${Cookies.get('accessToken')}`,
+          'Content-Type': 'application/json'
+        }
+      })
+
+      const assignResult = assignRes.data
+
+      console.log('📋 Assignment Response:', assignResult)
+
+      // ✅ ตรวจสอบผลลัพธ์แบบหลากหลาย
+      const isAssignSuccess =
+        assignResult.success === true ||
+        assignResult.success === 'true' ||
+        assignResult.message?.toLowerCase().includes('successfully') ||
+        assignResult.message?.toLowerCase().includes('assigned') ||
+        assignRes.status === 200
+
+      if (isAssignSuccess) {
+        alert(
+          `🎉 สร้าง Schedule "${scheduleResult.data.name || scheduleResult.data.scheduleNumber}" และมอบหมายให้ ${selectedDeviceIds.length} Device เรียบร้อยแล้ว`
+        )
+        console.log('✅ Assignment successful:', assignResult)
+
+        // ✅ เคลียร์ข้อมูลหลังสำเร็จ (optional)
+        // setUploadedFiles([])
+
+        // Optional: Navigate to next step
+        handleNext()
+      } else {
+        alert(`❌ Assign failed: ${assignResult.message || 'Unknown error'}`)
+        console.error('❌ Assignment failed:', assignResult)
+      }
+    } catch (error: any) {
+      console.error('❌ Error in createScheduleAndAssign:', error?.response?.data || error.message)
+
+      // Show more detailed error message
+      const errorMessage =
+        error?.response?.data?.message ||
+        error?.response?.data?.raw ||
+        error.message ||
+        'เกิดข้อผิดพลาดที่ไม่ทราบสาเหตุ'
+
+      alert(`❌ เกิดข้อผิดพลาด: ${errorMessage}`)
+    } finally {
+      setIsProcessing(false)
+    }
+  }
+
+  const uploadViaProxy = async () => {
+    const formData = new FormData()
+    uploadedFiles.forEach((file, index) => {
+      formData.append(`media[${index}].name`, file.name)
+      formData.append(`media[${index}].comments`, file.comments || '')
+      formData.append(`media[${index}].file`, file.file)
+    })
+
+    try {
+      const res = await axios.post('/api/auth/upload-media', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+          Authorization: `Bearer ${Cookies.get('accessToken')}`
+        }
+      })
+
+      if (res.data.success && Array.isArray(res.data.data)) {
+        ;(res.data.data as MediaItem[]).forEach((item: MediaItem) => {
+          console.log('[📦 Uploaded]', {
+            id: item.id,
+            title: item.title,
+            type: item.type,
+            fileUrl: item.fileUrl,
+            fileSize: item.fileSize
+          })
+        })
+      } else {
+        console.warn('[❗️ Upload failed]', res.data.message, res.data.raw)
+      }
+    } catch (err: any) {
+      console.error('❌ Upload via proxy failed:', err?.response?.data?.message ?? err.message, err)
+    }
+  }
+
+  // const createSchedule = async () => {
+  //   try {
+  //     const formatDate = (date: Date) => date.toISOString().split('T')[0] // YYYY-MM-DD
+
+  //     const run_at = startDateTime ? formatDate(startDateTime) : ''
+  //     const run_at_to = endDateTime ? formatDate(endDateTime) : ''
+
+  //     // ✅ แก้ไข: ระบุ type ให้ชัดเจน
+  //     const allMediaItems: ScheduleItem[] = []
+
+  //     // เพิ่มไฟล์ที่อัพโหลดใหม่
+  //     uploadedFiles.forEach(file => {
+  //       const mediaType = file.type.startsWith('video/') ? 'video' : 'image'
+  //       const scheduleItem: ScheduleItem = {
+  //         // สำหรับไฟล์ใหม่ใช้ index หรือ temporary id
+  //         id: 0, // API อาจจะต้องการ id จริงหลังจาก upload
+  //         type: mediaType,
+  //         set_time: false,
+  //         set_date: true,
+  //         ad_run_at: run_at,
+  //         ad_run_at_to: run_at_to
+  //       }
+
+  //       // เพิ่ม duration สำหรับรูปภาพ
+  //       if (mediaType === 'image') {
+  //         scheduleItem.duration = 10
+  //       }
+
+  //       allMediaItems.push(scheduleItem)
+  //     })
+
+  //     // เพิ่มไฟล์เก่าที่เลือก
+  //     selectedOldFiles.forEach(file => {
+  //       const scheduleItem: ScheduleItem = {
+  //         id: file.id,
+  //         type: file.type,
+  //         set_time: false,
+  //         set_date: true,
+  //         ad_run_at: run_at,
+  //         ad_run_at_to: run_at_to
+  //       }
+
+  //       // เพิ่ม duration สำหรับรูปภาพ
+  //       if (file.type === 'image') {
+  //         scheduleItem.duration = file.duration || 10
+  //       }
+
+  //       allMediaItems.push(scheduleItem)
+  //     })
+
+  //     const normalizeOrientation = (value: string) => {
+  //       if (value.toLowerCase() === 'landscape') return 'horizontal'
+  //       if (value.toLowerCase() === 'portrait') return 'vertical'
+  //       return value.toLowerCase()
+  //     }
+
+  //     const payload = {
+  //       name: adName || 'Untitled Schedule',
+  //       orientation: normalizeOrientation(orientation),
+  //       run_at,
+  //       run_at_to,
+  //       schedule_items: allMediaItems
+  //     }
+
+  //     console.log('📤 Creating schedule with payload:', payload)
+  //     console.log('📊 Total schedule items:', allMediaItems.length)
+
+  //     // ✅ ตรวจสอบว่ามี items หรือไม่ก่อนส่ง
+  //     if (allMediaItems.length === 0) {
+  //       alert('❌ ไม่สามารถสร้าง Schedule ได้ เนื่องจากไม่มีไฟล์สื่อที่เลือก')
+  //       return
+  //     }
+
+  //     const response = await axios.post('/api/proxy/schedules', payload, {
+  //       headers: {
+  //         'Content-Type': 'application/json'
+  //       }
+  //     })
+
+  //     const result = response.data
+
+  //     if (result.success) {
+  //       console.log('✅ Schedule Created:', result.data)
+  //       alert(`🎉 Schedule Created: ${result.data.scheduleNumber}`)
+  //     } else {
+  //       console.error('❌ Schedule Creation Failed:', result.message)
+  //       alert(`❌ สร้าง Schedule ไม่สำเร็จ: ${result.message}`)
+  //     }
+  //   } catch (err: any) {
+  //     console.error('❌ Error creating schedule:', err?.response?.data ?? err.message)
+  //     alert(`❌ เกิดข้อผิดพลาด: ${err?.response?.data?.message || err.message}`)
+  //   }
+  // }
+
+  // แก้ไขฟังก์ชัน createScheduleWithUpload
+  const createScheduleWithUpload = async () => {
+    try {
+      let uploadedFileIds: MediaItem[] = []
+
+      // 📤 Step 1: Upload ไฟล์ใหม่ก่อน (ถ้ามี)
+      if (uploadedFiles.length > 0) {
+        console.log('📤 Uploading files first...')
+
+        const formData = new FormData()
+        uploadedFiles.forEach((file, index) => {
+          formData.append(`media[${index}].name`, file.name)
+          formData.append(`media[${index}].comments`, file.comments || '')
+          formData.append(`media[${index}].file`, file.file)
+        })
+
+        try {
+          const uploadRes = await axios.post('/api/auth/upload-media', formData, {
+            headers: {
+              'Content-Type': 'multipart/form-data',
+              Authorization: `Bearer ${Cookies.get('accessToken')}`
+            }
+          })
+
+          if (uploadRes.data.success && Array.isArray(uploadRes.data.data)) {
+            uploadedFileIds = uploadRes.data.data as MediaItem[]
+            console.log('✅ Files uploaded successfully:', uploadedFileIds.length)
+          } else {
+            console.warn('❌ Upload failed:', uploadRes.data.message)
+            alert('❌ การอัพโหลดไฟล์ไม่สำเร็จ กรุณาลองใหม่')
+            return
+          }
+        } catch (uploadErr: any) {
+          console.error('❌ Upload error:', uploadErr?.response?.data?.message ?? uploadErr.message)
+          alert('❌ เกิดข้อผิดพลาดในการอัพโหลดไฟล์')
+          return
+        }
+      }
+
+      // 📅 Step 2: สร้าง Schedule
+      const formatDate = (date: Date) => date.toISOString().split('T')[0]
+      const run_at = startDateTime ? formatDate(startDateTime) : ''
+      const run_at_to = endDateTime ? formatDate(endDateTime) : ''
+
+      // ✅ แก้ไข: ระบุ type ให้ชัดเจน
+      const allMediaItems: ScheduleItem[] = []
+
+      // เพิ่มไฟล์ที่อัพโหลดใหม่ (ใช้ id จริงจากการ upload)
+      uploadedFileIds.forEach(file => {
+        const scheduleItem: ScheduleItem = {
+          id: file.id,
+          type: file.type,
+          set_time: false,
+          set_date: true,
+          ad_run_at: run_at,
+          ad_run_at_to: run_at_to
+        }
+
+        // เพิ่ม duration สำหรับรูปภาพ
+        if (file.type === 'image') {
+          scheduleItem.duration = 10
+        }
+
+        allMediaItems.push(scheduleItem)
+      })
+
+      // เพิ่มไฟล์เก่าที่เลือก
+      selectedOldFiles.forEach(file => {
+        const scheduleItem: ScheduleItem = {
+          id: file.id,
+          type: file.type,
+          set_time: false,
+          set_date: true,
+          ad_run_at: run_at,
+          ad_run_at_to: run_at_to
+        }
+
+        // เพิ่ม duration สำหรับรูปภาพ
+        if (file.type === 'image') {
+          scheduleItem.duration = file.duration || 10
+        }
+
+        allMediaItems.push(scheduleItem)
+      })
+
+      if (allMediaItems.length === 0) {
+        alert('❌ ไม่สามารถสร้าง Schedule ได้ เนื่องจากไม่มีไฟล์สื่อที่เลือก')
+        return
+      }
+
+      const normalizeOrientation = (value: string) => {
+        if (value.toLowerCase() === 'landscape') return 'horizontal'
+        if (value.toLowerCase() === 'portrait') return 'vertical'
+        return value.toLowerCase()
+      }
+
+      const payload = {
+        name: adName || 'Untitled Schedule',
+        orientation: normalizeOrientation(orientation),
+        run_at,
+        run_at_to,
+        schedule_items: allMediaItems
+      }
+
+      console.log('📤 Creating schedule with payload:', payload)
+      console.log('📊 Total schedule items:', allMediaItems.length)
+
+      const response = await axios.post('/api/proxy/schedules', payload, {
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      })
+
+      const result = response.data
+
+      if (result.success) {
+        console.log('✅ Schedule Created:', result.data)
+        alert(`🎉 Schedule Created Successfully: ${result.data.scheduleNumber || result.data.name}`)
+      } else {
+        console.error('❌ Schedule Creation Failed:', result.message)
+        alert(`❌ สร้าง Schedule ไม่สำเร็จ: ${result.message}`)
+      }
+    } catch (err: any) {
+      console.error('❌ Error creating schedule:', err?.response?.data ?? err.message)
+      const errorMsg = err?.response?.data?.message || err?.response?.data?.raw || err.message
+      alert(`❌ เกิดข้อผิดพลาด: ${errorMsg}`)
+    }
+  }
+
   return (
     <Grid container spacing={6}>
       <Grid size={{ xs: 12, md: 12 }}>
@@ -215,12 +675,15 @@ const StepPropertyFeatures = ({
             width: '100%'
           }}
         >
-          <Container>
-            <Box display={'flex'} flexDirection={'column'} alignItems={'center'}>
-              <img src='/images/tv/Vector_red_big.svg' height='300' width='300' />
-              <Typography sx={{ mt: -9 }} variant='h5' color='initial'>
-                แนวนอน/แนวตั้ง: {orientation === 'landscape' ? 'แนวนอน (16:9)' : 'แนวตั้ง (9:16)'}
-              </Typography>
+          <Container sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+            <Box display='flex' flexDirection='column' alignItems='center' justifyContent='center'>
+              <Box
+                component='img'
+                src={orientation === 'landscape' ? '/images/tv/Vector_red_big.svg' : '/images/tv/Vector_red_big_l.svg'}
+                alt={orientation === 'landscape' ? 'แนวนอน (16:9)' : 'แนวตั้ง (9:16)'}
+                sx={{ mb: 3 }}
+              />
+              <Typography variant='h5'>{orientation === 'landscape' ? 'แนวนอน (16:9)' : 'แนวตั้ง (9:16)'}</Typography>
             </Box>
           </Container>
           <Divider
@@ -260,7 +723,7 @@ const StepPropertyFeatures = ({
                         วันที่เริ่มต้น
                       </Typography>
                       <Typography variant='caption' color='initial'>
-                        10/07/2025
+                        {startDateTime ? new Date(startDateTime).toLocaleDateString('th-TH') : '-'}
                       </Typography>
                     </Box>
                   </Box>
@@ -269,7 +732,7 @@ const StepPropertyFeatures = ({
                       วันที่สิ้นสุด
                     </Typography>
                     <Typography variant='caption' color='initial'>
-                      17/07/2025
+                      {endDateTime ? new Date(endDateTime).toLocaleDateString('th-TH') : '-'}
                     </Typography>
                   </Box>
                 </Box>
@@ -319,16 +782,29 @@ const StepPropertyFeatures = ({
           </Container>
         </Card>
       </Grid>
+      <Button
+        variant='outlined'
+        onClick={checkUploadedFileStatus}
+        sx={{ width: '100%', mt: 5 }}
+        disabled={isProcessing}
+      >
+        {isProcessing ? 'กำลังดำเนินการ...' : 'Create Schedule & Assign'}
+      </Button>
+      {/* <Button variant='outlined' sx={{ width: '100%' }} onClick={createScheduleWithUpload}>
+        Create Schedule
+      </Button> */}
+      {/* <Button variant='outlined' sx={{ width: '100%' }} onClick={createScheduleAndAssign}>
+        Create Schedule
+      </Button> */}
       <Grid size={{ xs: 12 }}>
         <Typography variant='h5'>รายการสื่อที่ใช้</Typography>
       </Grid>
-      <Box>
+      <Grid size={{ xs: 12 }}>
         {/* ✅ ส่วนวิดีโอ - แสดงทั้งไฟล์ใหม่และไฟล์เก่า */}
         <Box display='flex' alignItems='center' mb={2} gap={1}>
           <Icon icon='mdi:play-box' color='red' width={24} />
           <Typography variant='h6'>ไฟล์วิดีโอ ({allVideos.length} รายการ)</Typography>
         </Box>
-
         <Grid container spacing={2}>
           {/* แสดงวิดีโอที่อัพโหลดใหม่// ✅ แก้ไขการส่งข้อมูลไปยัง handleVideoPlay สำหรับวิดีโอที่อัพโหลดใหม่ */}
           {uploadedVideos.map((video, index) => (
@@ -375,46 +851,7 @@ const StepPropertyFeatures = ({
               </Card>
             </Grid>
           ))}
-          {/* ✅ เพิ่มการ debug ใน Video Dialog */}
-          <Dialog open={videoDialogOpen} onClose={handleVideoClose} maxWidth='md' fullWidth>
-            <DialogTitle>
-              <Box display='flex' justifyContent='space-between' alignItems='center'>
-                <Typography variant='h6'>{currentVideo?.name}</Typography>
-                <IconButton onClick={handleVideoClose}>
-                  <Icon icon='material-symbols:close' />
-                </IconButton>
-              </Box>
-            </DialogTitle>
-            <DialogContent>
-              {currentVideo && (
-                <>
-                  {process.env.NODE_ENV === 'development' && (
-                    <Typography variant='caption' display='block' mb={1}>
-                      URL: {currentVideo.url}
-                    </Typography>
-                  )}
-                  <video
-                    controls
-                    width='100%'
-                    style={{ maxHeight: '400px' }}
-                    autoPlay
-                    onError={e => {
-                      console.error('Video playback error:', e)
-                      console.log('Video URL:', currentVideo.url)
-                    }}
-                    onLoadStart={() => {
-                      console.log('Video loading started')
-                    }}
-                  >
-                    <source src={currentVideo.url} type='video/mp4' />
-                    <source src={currentVideo.url} type='video/webm' />
-                    <source src={currentVideo.url} type='video/ogg' />
-                    Your browser does not support the video tag.
-                  </video>
-                </>
-              )}
-            </DialogContent>
-          </Dialog>
+
           {/* แสดงวิดีโอเก่าที่เลือก */}
           {selectedOldVideos.map((video, index) => (
             <Grid size={{ md: 3 }} key={`old-video-${video.id}`}>
@@ -560,8 +997,7 @@ const StepPropertyFeatures = ({
             </Grid>
           </>
         )}
-      </Box>
-
+      </Grid>
       {/* Video Dialog */}
       <Dialog open={videoDialogOpen} onClose={handleVideoClose} maxWidth='md' fullWidth>
         <DialogTitle>
@@ -581,7 +1017,6 @@ const StepPropertyFeatures = ({
           )}
         </DialogContent>
       </Dialog>
-
       {/* Image Dialog */}
       <Dialog open={imageDialogOpen} onClose={handleImageClose} maxWidth='md' fullWidth>
         <DialogTitle>
@@ -607,7 +1042,6 @@ const StepPropertyFeatures = ({
           )}
         </DialogContent>
       </Dialog>
-
       {isInternal && (
         <Grid size={{ xs: 12 }}>
           <div className='flex items-center justify-between'>

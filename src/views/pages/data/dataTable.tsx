@@ -437,32 +437,29 @@ const DataTable = () => {
           />
           <div>
             <Grid container spacing={0} sx={{ m: 5, mt: -5, display: 'flex', justifyContent: 'space-between' }}>
-              <Grid size={{ xs: 2 }}>
-                <CustomTextField
-                  select
-                  fullWidth
-                  value={filterType}
-                  onChange={e => {
-                    const val = e.target.value
-                    setFilterType(val)
-                    // กรองข้อมูลใน table ด้วย (ถ้าจำเป็น)
-                    if (val === '1') {
-                      setData(defaultData) // ทั้งหมด
-                    } else {
-                      const keyword = val === '2' ? 'แนวนอน' : 'แนวตั้ง'
-                      const filtered = defaultData.filter(item => item.direction?.style?.includes(keyword))
-                      setData(filtered)
-                    }
-                  }}
-                  label='รายการ'
-                >
-                  <MenuItem value='1'>ทั้งหมด</MenuItem>
-                  <MenuItem value='2'>วิดีโอ แนวนอน</MenuItem>
-                  <MenuItem value='3'>วิดีโอ แนวตั้ง</MenuItem>
-                  <MenuItem value='4'>รูปภาพ</MenuItem>
-                </CustomTextField>
-              </Grid>
-              <Grid size={{ xs: 1 }}>
+              <CustomTextField
+                select
+                value={filterType}
+                onChange={e => {
+                  const val = e.target.value
+                  setFilterType(val)
+                  // กรองข้อมูลใน table ด้วย (ถ้าจำเป็น)
+                  if (val === '1') {
+                    setData(defaultData) // ทั้งหมด
+                  } else {
+                    const keyword = val === '2' ? 'แนวนอน' : 'แนวตั้ง'
+                    const filtered = defaultData.filter(item => item.direction?.style?.includes(keyword))
+                    setData(filtered)
+                  }
+                }}
+                label='รายการ'
+              >
+                <MenuItem value='1'>ทั้งหมด</MenuItem>
+                <MenuItem value='2'>วิดีโอ แนวนอน</MenuItem>
+                <MenuItem value='3'>วิดีโอ แนวตั้ง</MenuItem>
+                <MenuItem value='4'>รูปภาพ</MenuItem>
+              </CustomTextField>
+              <Grid>
                 <CustomTextField
                   select
                   fullWidth

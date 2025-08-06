@@ -2,8 +2,11 @@
 
 import { useEffect } from 'react'
 import Cookies from 'js-cookie'
+import { useRouter } from 'next/navigation'
 
 const TokenRefresher = () => {
+  const router = useRouter()
+
   useEffect(() => {
     const interval = setInterval(async () => {
       const refreshToken = Cookies.get('refreshToken')
@@ -18,7 +21,7 @@ const TokenRefresher = () => {
 
         const data = await res.json()
 
-        if (data.success && data.data.access_token) {
+        if (data.success && data.data?.access_token) {
           Cookies.set('accessToken', data.data.access_token, {
             expires: new Date(Date.now() + data.data.expires_in * 1000)
           })
@@ -27,15 +30,21 @@ const TokenRefresher = () => {
           })
           console.log('[✅ Refresh สำเร็จ] ได้ accessToken ใหม่แล้ว')
         } else {
+          Cookies.remove('accessToken')
+          Cookies.remove('refreshToken')
+          router.replace('pages/auth/login')
           console.warn('[⚠️ Refresh Failed]', data.message)
         }
       } catch (err) {
+        Cookies.remove('accessToken')
+        Cookies.remove('refreshToken')
+        router.replace('pages/auth/login')
         console.error('[❌ Refresh Error]', err)
       }
-    }, 270 * 1000)
+    }, 200 * 1000)
 
     return () => clearInterval(interval)
-  }, [])
+  }, [router])
 
   return null
 }

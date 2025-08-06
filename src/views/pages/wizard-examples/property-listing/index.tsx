@@ -1,7 +1,7 @@
 'use client'
 
 // React Imports
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
 import { Icon } from '@iconify/react'
 
@@ -22,6 +22,7 @@ import StepPropertyDetails from './StepPropertyDetails'
 import StepPropertyFeatures from './StepPropertyFeatures'
 
 import StepperWrapper from '@core/styles/stepper'
+import Cookies from 'js-cookie'
 
 const steps = [
   {
@@ -61,6 +62,31 @@ type UploadedFile = {
   preview?: string
 }
 
+// Add proper type definitions for API responses
+interface ApiResponse<T = any> {
+  data?: T
+}
+
+interface DeviceApiResponse extends ApiResponse {
+  data?: any[]
+}
+
+interface ScheduleApiResponse extends ApiResponse {
+  data?: any[]
+}
+
+interface MediaApiResponse extends ApiResponse {
+  data?: {
+    media?: any[]
+  }
+}
+
+interface ScheduleListApiResponse extends ApiResponse {
+  data?: {
+    data?: any[]
+  }
+}
+
 const Step = styled(MuiStep)<StepProps>({
   '&:not(:has(.Mui-active)):not(:has(.Mui-completed)) .MuiAvatar-root, & .step-label .step-title': {
     color: 'var(--mui-palette-text-secondary)'
@@ -82,9 +108,27 @@ const Step = styled(MuiStep)<StepProps>({
 const PropertyListingWizard = () => {
   const [activeStep, setActiveStep] = useState<number>(0)
   const [selectedOrientation, setSelectedOrientation] = useState<'landscape' | 'portrait'>('landscape')
+  const getRoundedTime = (date: Date = new Date()): Date => {
+    const rounded = new Date(date)
+    const minutes = rounded.getMinutes()
+    const remainder = 15 - (minutes % 15)
 
-  // const [value, setValue] = useState<string>('controlled-checked')
-  // const theme = useTheme()
+    if (remainder < 15) {
+      rounded.setMinutes(minutes + remainder)
+    } else {
+      rounded.setMinutes(minutes)
+    }
+
+    rounded.setSeconds(0)
+    rounded.setMilliseconds(0)
+
+    return rounded
+  }
+
+  const [startDateTime, setStartDateTime] = useState<Date | null>(getRoundedTime())
+  // const [startDateTime, setStartDateTime] = useState<Date | null>(new Date())
+  const [endDateTime, setEndDateTime] = useState<Date | null>(null)
+
   const [oldFiles, setOldFiles] = useState<MediaItem[]>([])
   const [selected, setSelected] = useState<number[]>([])
 
@@ -92,8 +136,12 @@ const PropertyListingWizard = () => {
   const [adName, setAdName] = useState<string>('')
   const [adDescription, setAdDescription] = useState<string>('')
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([])
-
+  const [deviceInfo, setDeviceInfo] = useState<any[]>([])
+  const [scheduleAssignments, setScheduleAssignments] = useState<any[]>([])
   const selectedOldFiles = oldFiles.filter(file => selected.includes(file.id))
+  const [mediaList, setMediaList] = useState<any[]>([])
+  const [scheduleList, setScheduleList] = useState<any[]>([])
+  const [selectedDeviceIds, setSelectedDeviceIds] = useState<string[]>([])
 
   const handleNext = () => {
     if (activeStep !== steps.length - 1) {
@@ -109,10 +157,192 @@ const PropertyListingWizard = () => {
     }
   }
 
+  const fetchScheduleAssignments = async () => {
+    try {
+      const accessToken = Cookies.get('accessToken')
+      if (!accessToken) {
+        console.error('Access token is missing!')
+        return
+      }
+
+      const res = await fetch('/api/auth/device', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json'
+        }
+      })
+
+      const text = await res.text()
+
+      if (res.ok) {
+        try {
+          const data = JSON.parse(text) as DeviceApiResponse
+          setDeviceInfo(data.data || [])
+          console.log('Parsed Data:', data)
+        } catch (e) {
+          console.error('Failed to parse JSON:', e)
+        }
+      } else {
+        console.error('Error fetching API:', text)
+      }
+    } catch (error) {
+      console.error('Unexpected error:', error)
+    }
+  }
+
+  useEffect(() => {
+    fetchData()
+  }, [])
+
+  const fetchData = async () => {
+    const accessToken = Cookies.get('accessToken')
+    if (!accessToken) return
+
+    try {
+      const fetchJSON = async <T = any,>(url: string, method: 'GET' | 'POST'): Promise<T> => {
+        const res = await fetch(url, {
+          method,
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json'
+          }
+        })
+
+        if (!res.ok) {
+          throw new Error(`HTTP error! status: ${res.status}`)
+        }
+
+        const text = await res.text()
+        if (!text.trim()) {
+          throw new Error('Empty response')
+        }
+        if (text.trim().startsWith('<')) {
+          throw new Error(`Received HTML response instead of JSON. Status: ${res.status}`)
+        }
+
+        try {
+          return JSON.parse(text) as T
+        } catch (parseError) {
+          throw new Error(`Invalid JSON response: ${text.substring(0, 100)}...`)
+        }
+      }
+
+      let deviceData: DeviceApiResponse = { data: [] }
+      let scheduleData: ScheduleApiResponse = { data: [] }
+      let mediaData: MediaApiResponse = { data: { media: [] } }
+      let scheduleListData: ScheduleListApiResponse = { data: { data: [] } }
+
+      try {
+        deviceData = await fetchJSON<DeviceApiResponse>('/api/auth/device', 'POST')
+      } catch (err) {
+        console.error('Device data fetch failed:', err)
+      }
+
+      try {
+        scheduleData = await fetchJSON<ScheduleApiResponse>('/api/auth/schedule-assignments', 'POST')
+      } catch (err) {
+        console.error('Schedule data fetch failed:', err)
+      }
+
+      try {
+        mediaData = await fetchJSON<MediaApiResponse>('/api/auth/media', 'GET')
+      } catch (err) {
+        console.warn('Media data fetch failed:', err)
+      }
+
+      try {
+        scheduleListData = await fetchJSON<ScheduleListApiResponse>('/api/proxy/schedules', 'GET')
+      } catch (err) {
+        console.warn('Schedule list fetch failed:', err)
+      }
+
+      // ✅ ปรับปรุงการดึงรายละเอียด schedule
+      const schedulesWithDetails: any[] = []
+      console.log('📋 Processing schedules:', scheduleListData.data?.data)
+
+      if (scheduleListData.data?.data) {
+        for (const schedule of scheduleListData.data.data) {
+          try {
+            console.log(`🔄 Fetching details for schedule ID: ${schedule.id}`)
+            const detailResponse = await fetch(`/api/schedules/${schedule.id}`, {
+              method: 'GET',
+              headers: {
+                Authorization: `Bearer ${accessToken}`,
+                'Content-Type': 'application/json'
+              }
+            })
+
+            if (detailResponse.ok) {
+              const detailText = await detailResponse.text()
+              const detailData = JSON.parse(detailText)
+              console.log(`✅ Schedule ${schedule.id} details:`, detailData)
+
+              // ✅ ตรวจสอบว่ามี adsItems หรือไม่
+              const scheduleDetail = detailData.data || detailData
+              console.log(`📋 AdsItems for schedule ${schedule.id}:`, scheduleDetail?.adsItems)
+
+              if (scheduleDetail) {
+                schedulesWithDetails.push(scheduleDetail)
+              } else {
+                schedulesWithDetails.push(detailData)
+              }
+            } else {
+              console.warn(`⚠️ Failed to fetch details for schedule ${schedule.id}: ${detailResponse.status}`)
+              schedulesWithDetails.push(schedule)
+            }
+          } catch (err) {
+            console.warn(`❌ Error fetching details for schedule ${schedule.id}:`, err)
+            schedulesWithDetails.push(schedule)
+          }
+        }
+      }
+
+      // console.log('📋 Final schedules with details:', schedulesWithDetails)
+
+      const scheduleMap = new Map()
+      scheduleData.data?.forEach((item: any) => {
+        scheduleMap.set(item.device_id, item.schedules_today)
+      })
+
+      const mergedDevices =
+        deviceData.data?.map((device: any) => ({
+          ...device,
+          schedules_today: scheduleMap.get(device.device_id) || null
+        })) || []
+
+      setDeviceInfo(mergedDevices)
+      setMediaList(mediaData.data?.media || [])
+      setScheduleList(schedulesWithDetails)
+    } catch (err) {
+      console.error('Error loading data:', err)
+      setDeviceInfo([])
+      setMediaList([])
+      setScheduleList([])
+    }
+  }
+
   const getStepContent = (step: number) => {
     switch (step) {
       case 0:
-        return <StepPersonalDetails activeStep={step} handleNext={handleNext} handlePrev={handlePrev} steps={steps} />
+        return (
+          <StepPersonalDetails
+            activeStep={step}
+            handleNext={handleNext}
+            handlePrev={handlePrev}
+            steps={steps}
+            startDateTime={startDateTime}
+            setStartDateTime={setStartDateTime}
+            endDateTime={endDateTime}
+            setEndDateTime={setEndDateTime}
+            deviceInfo={deviceInfo}
+            fetchDeviceInfo={fetchScheduleAssignments}
+            mediaList={mediaList}
+            scheduleList={scheduleList}
+            selectedDeviceIds={selectedDeviceIds}
+            setSelectedDeviceIds={setSelectedDeviceIds}
+          />
+        )
       case 1:
         return (
           <StepPropertyDetails
@@ -120,19 +350,20 @@ const PropertyListingWizard = () => {
             handleNext={handleNext}
             handlePrev={handlePrev}
             steps={steps}
-            onOrientationChange={setSelectedOrientation}
+            onOrientationChange={setSelectedOrientation} // ✅ ส่งฟังก์ชันอัปเดต
             isInternalEdit
             selectedOldFiles={selectedOldFiles}
             oldFiles={oldFiles}
             setOldFiles={setOldFiles}
             selected={selected}
-            setSelected={setSelected} // ✅ เพิ่ม props สำหรับส่งข้อมูล
+            setSelected={setSelected}
             adName={adName}
             setAdName={setAdName}
             adDescription={adDescription}
             setAdDescription={setAdDescription}
             uploadedFiles={uploadedFiles}
             setUploadedFiles={setUploadedFiles}
+            orientation={selectedOrientation} // ✅ ส่ง state หลักไป
           />
         )
       case 2:
@@ -142,14 +373,16 @@ const PropertyListingWizard = () => {
             handleNext={handleNext}
             handlePrev={handlePrev}
             steps={steps}
-            orientation={selectedOrientation}
+            orientation={selectedOrientation} // ✅ ใช้ selectedOrientation จาก main state
             isInternal
             selectedOldFiles={selectedOldFiles}
-            // ✅ เพิ่ม props สำหรับรับข้อมูล
             adName={adName}
             adDescription={adDescription}
             uploadedFiles={uploadedFiles}
-            setUploadedFiles={setUploadedFiles} // ✅ เพิ่มบรรทัดนี้
+            setUploadedFiles={setUploadedFiles}
+            startDateTime={startDateTime}
+            endDateTime={endDateTime}
+            selectedDeviceIds={selectedDeviceIds}
           />
         )
       default:

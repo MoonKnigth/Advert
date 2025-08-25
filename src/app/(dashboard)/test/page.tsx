@@ -1,115 +1,84 @@
 'use client'
+
+// React Imports
 import { useState } from 'react'
-import { Grid, Box, Typography, IconButton, TextField, Button } from '@mui/material'
+import type { MouseEvent } from 'react'
 
-const FileUploadWithEdit = () => {
-  const [uploadedFiles, setUploadedFiles] = useState([
-    { name: 'file1.mp4', type: 'video/mp4', size: 1024 * 1024 } // example file
-  ])
+// MUI Imports
+import { styled } from '@mui/material/styles'
+import ListItemIcon from '@mui/material/ListItemIcon'
+import ListItemText from '@mui/material/ListItemText'
+import MuiMenu from '@mui/material/Menu'
+import MuiMenuItem from '@mui/material/MenuItem'
+import type { MenuProps } from '@mui/material/Menu'
+import type { MenuItemProps } from '@mui/material/MenuItem'
+import { IconButton } from '@mui/material'
 
-  const [editingIndex, setEditingIndex] = useState<number | null>(null)
-  const [newFileName, setNewFileName] = useState<string>('')
-
-  // Handle name change in the input field
-  const handleFileNameChange = (index: number, newName: string) => {
-    setUploadedFiles(prev => {
-      const updatedFiles = [...prev]
-      updatedFiles[index].name = newName
-      return updatedFiles
-    })
+// Styled Menu component
+const Menu = styled(MuiMenu)<MenuProps>({
+  '& .MuiMenu-paper': {
+    border: '1px solid var(--mui-palette-divider)'
   }
+})
 
-  // Handle start of editing
-  const handleEditClick = (index: number) => {
-    setEditingIndex(index) // Set which file to edit
-    setNewFileName(uploadedFiles[index].name) // Pre-fill the input field with the current name
-  }
-
-  // Handle saving the new name
-  const handleSave = () => {
-    if (editingIndex !== null) {
-      handleFileNameChange(editingIndex, newFileName)
-      setEditingIndex(null) // Close the editor
+// Styled MenuItem component
+const MenuItem = styled(MuiMenuItem)<MenuItemProps>({
+  '&:focus': {
+    backgroundColor: 'var(--mui-palette-primary-main)',
+    '& .MuiListItemIcon-root, & .MuiListItemText-primary': {
+      color: 'var(--mui-palette-common-white)'
     }
   }
+})
 
-  // Handle cancel editing
-  const handleCancel = () => {
-    setEditingIndex(null) // Close the editor without saving
+const MenuCustomized = () => {
+  // States
+  const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null)
+
+  const handleClick = (event: MouseEvent<HTMLElement>) => {
+    setAnchorEl(event.currentTarget)
+  }
+
+  const handleClose = () => {
+    setAnchorEl(null)
   }
 
   return (
     <>
-      <Grid container spacing={2}>
-        {uploadedFiles.map((file, index) => (
-          <Grid item xs={12} key={index}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-              <Typography variant='body1' sx={{ fontWeight: 600 }}>
-                {file.name}
-              </Typography>
-              {/* Button to start editing */}
-              <IconButton onClick={() => handleEditClick(index)}>
-                <i className='bx bx-edit' />
-              </IconButton>
-
-              {/* If editing, show the text field */}
-              {editingIndex === index ? (
-                <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
-                  <TextField
-                    value={newFileName}
-                    onChange={e => setNewFileName(e.target.value)}
-                    variant='outlined'
-                    size='small'
-                    sx={{ maxWidth: '200px' }}
-                  />
-                  <Button variant='contained' color='primary' onClick={handleSave}>
-                    OK
-                  </Button>
-                  <IconButton onClick={handleCancel} color='error'>
-                    <i className='bx bx-x' />
-                  </IconButton>
-                </Box>
-              ) : null}
-            </Box>
-          </Grid>
-        ))}
-      </Grid>
-      <Grid container spacing={2}>
-        {uploadedFiles.map((file, index) => (
-          <Grid item xs={12} key={index}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-              <Typography variant='body1' sx={{ fontWeight: 600 }}>
-                {file.name}
-              </Typography>
-              {/* Button to start editing */}
-              <IconButton onClick={() => handleEditClick(index)}>
-                <i className='bx bx-edit' />
-              </IconButton>
-
-              {/* If editing, show the text field */}
-              {editingIndex === index ? (
-                <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
-                  <TextField
-                    value={newFileName}
-                    onChange={e => setNewFileName(e.target.value)}
-                    variant='outlined'
-                    size='small'
-                    sx={{ maxWidth: '200px' }}
-                  />
-                  <Button variant='contained' color='primary' onClick={handleSave}>
-                    OK
-                  </Button>
-                  <IconButton onClick={handleCancel} color='error'>
-                    <i className='bx bx-x' />
-                  </IconButton>
-                </Box>
-              ) : null}
-            </Box>
-          </Grid>
-        ))}
-      </Grid>
+      <IconButton aria-label='more' aria-controls='long-menu' aria-haspopup='true' onClick={handleClick}>
+        <i className='bx-dots-vertical-rounded' />
+      </IconButton>
+      <Menu
+        keepMounted
+        elevation={0}
+        anchorEl={anchorEl}
+        id='customized-menu'
+        onClose={handleClose}
+        open={Boolean(anchorEl)}
+        anchorOrigin={{
+          vertical: 'bottom',
+          horizontal: 'center'
+        }}
+        transformOrigin={{
+          vertical: 'top',
+          horizontal: 'center'
+        }}
+      >
+        <MenuItem>
+          <ListItemIcon>
+            <i className='bx bx-edit' />
+          </ListItemIcon>
+          <ListItemText primary='แก้ไขข้อมูลอุปกรณ์' />
+        </MenuItem>
+        <MenuItem>
+          <ListItemIcon>
+            <i className='bx bx-trash' />
+          </ListItemIcon>
+          <ListItemText primary='ลบข้อมูลอุปกรณ์' />
+        </MenuItem>
+      </Menu>
     </>
   )
 }
 
-export default FileUploadWithEdit
+export default MenuCustomized

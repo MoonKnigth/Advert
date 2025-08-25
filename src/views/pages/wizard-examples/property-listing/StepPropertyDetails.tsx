@@ -1,8 +1,13 @@
-// React Imports
-import { useState, useRef, useCallback, ChangeEvent, DragEvent } from 'react'
-import { PlayArrow as PlayIcon, VideoLibrary as VideoIcon, Image as ImageIcon } from '@mui/icons-material'
+//src/views/pages/wizard-examples/property-listing/StepPropertyDetails.tsx
 
-// MUI Imports
+'use client'
+
+import type { ChangeEvent, DragEvent } from 'react'
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
+
+import { VideoLibrary as VideoIcon, Image as ImageIcon } from '@mui/icons-material'
+
+// MUI
 import Radio from '@mui/material/Radio'
 import RadioGroup from '@mui/material/RadioGroup'
 import Grid from '@mui/material/Grid2'
@@ -20,17 +25,17 @@ import {
   Checkbox,
   CardContent,
   Card,
-  Tab,
-  Tabs
+  Tab
 } from '@mui/material'
 import { TabContext, TabList, TabPanel } from '@mui/lab'
 
-// Component Imports
+// Others
 import Cookies from 'js-cookie'
 import { Icon } from '@iconify/react'
-import axios from 'axios'
 
-// Define Types
+import type { MediaItem } from '@/types/media'
+
+// ===== Types =====
 interface OrientationOption {
   id: 'landscape' | 'portrait'
   titleTh: string
@@ -49,19 +54,6 @@ interface UploadedFile {
   comments?: string
 }
 
-interface MediaItem {
-  id: number
-  title: string
-  type: string
-  fileUrl: string | null
-  thumbnailUrl: string | null
-  duration: number | null
-  fileSize: number | null
-  status: number | null
-  aspectRatio: string | null
-}
-
-// Props for component
 type Props = {
   activeStep: number
   handleNext: () => void
@@ -83,12 +75,7 @@ type Props = {
   orientation: 'landscape' | 'portrait'
 }
 
-// Styled Components
-const Content = styled(Typography)(({ theme }) => ({
-  ...theme.typography.body2,
-  textAlign: 'center'
-}))
-
+// ===== Styled =====
 const OrientationCard = styled(Paper, {
   shouldForwardProp: prop => prop !== 'selected'
 })<{ selected?: boolean }>(({ theme, selected }) => ({
@@ -106,7 +93,9 @@ const OrientationCard = styled(Paper, {
 const UploadZone = styled(Box, {
   shouldForwardProp: prop => prop !== 'isDragging' && prop !== 'hasError'
 })<{ isDragging?: boolean; hasError?: boolean }>(({ theme, isDragging, hasError }) => ({
-  border: `2px dashed ${hasError ? theme.palette.error.main : isDragging ? theme.palette.primary.main : theme.palette.grey[300]}`,
+  border: `2px dashed ${
+    hasError ? theme.palette.error.main : isDragging ? theme.palette.primary.main : theme.palette.grey[300]
+  }`,
   borderRadius: theme.shape.borderRadius,
   padding: theme.spacing(4),
   textAlign: 'center',
@@ -130,6 +119,26 @@ const FilePreview = styled(Box)(({ theme }) => ({
   marginTop: theme.spacing(2)
 }))
 
+const OldFilesZone = styled(Box, {
+  shouldForwardProp: prop => prop !== 'isExpanded'
+})<{ isExpanded?: boolean }>(({ theme, isExpanded }) => ({
+  border: `2px dashed ${theme.palette.secondary.main}`,
+  borderRadius: theme.shape.borderRadius,
+  padding: theme.spacing(3),
+  textAlign: 'center',
+  cursor: 'pointer',
+  transition: 'all 0.3s ease-in-out',
+  backgroundColor: isExpanded ? theme.palette.secondary.main + '08' : 'transparent',
+  marginBottom: theme.spacing(2),
+  '&:hover': {
+    borderColor: theme.palette.secondary.dark,
+    backgroundColor: theme.palette.secondary.main + '12',
+    transform: 'translateY(-2px)',
+    boxShadow: theme.shadows[4]
+  }
+}))
+
+// ===== Component =====
 const StepPropertyDetails = ({
   activeStep,
   handleNext,
@@ -137,7 +146,6 @@ const StepPropertyDetails = ({
   steps,
   isInternalEdit = true,
   onOrientationChange,
-  selectedOldFiles,
   oldFiles,
   setOldFiles,
   selected,
@@ -150,7 +158,6 @@ const StepPropertyDetails = ({
   setUploadedFiles,
   orientation
 }: Props) => {
-  // ---- Options
   const orientationOptions: OrientationOption[] = [
     {
       id: 'landscape',
@@ -170,50 +177,107 @@ const StepPropertyDetails = ({
     }
   ]
 
-  // ---- State
+  // Local states
   const [isDragging, setIsDragging] = useState(false)
-  const [uploadError, setUploadError] = useState<string>('')
+  const [uploadErrors, setUploadErrors] = useState<string[]>([])
   const [tabValue, setTabValue] = useState<string>('1')
   const [showOldFiles, setShowOldFiles] = useState<boolean>(false)
+  const [editingIndex, setEditingIndex] = useState<number | null>(null)
+  const [newFileName, setNewFileName] = useState<string>('')
+
   const fileInputRef = useRef<HTMLInputElement>(null)
   const cloud = 'https://cloud.softacular.net'
 
-  // ---- File Validation
-  const validateFile = (file: File): string | null => {
-    const maxSize = 120 * 1024 * 1024 // 120MB
-    const allowedTypes = ['video/mp4', 'image/jpeg', 'image/png', 'image/webp', 'image/gif']
+  // Storage usage
+  const [, setUsedByteInGB] = useState<number>(0)
+  const [, setMaxStorage] = useState<number>(0)
 
-    if (!allowedTypes.includes(file.type)) return 'รองรับเฉพาะไฟล์ .mp4 หรือไฟล์ภาพ (JPG, PNG, WEBP, GIF)'
+  const fetchStorageUsage = useCallback(async () => {
+    try {
+      const response = await fetch('/api/proxy/storage-usage', {
+        headers: { Authorization: `Bearer ${Cookies.get('accessToken')}` }
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+
+        console.error('Failed to fetch storage usage:', errorText)
+
+        return
+      }
+
+      const data = await response.json()
+
+      setUsedByteInGB((data?.data?.used_byte ?? 0) / (1000 * 1000 * 1000))
+      setMaxStorage((data?.data?.max_storage ?? 0) / (1000 * 1000 * 1000))
+    } catch (error) {
+      console.error('Error fetching storage usage:', error)
+    }
+  }, [])
+
+  useEffect(() => {
+    fetchStorageUsage()
+  }, [fetchStorageUsage])
+
+  // ===== File validation & uploads =====
+  const validateFile = (file: File): string | null => {
+    const maxSize = 120 * 1000 * 1000 // 120MB
+    const allowed = ['video/mp4', 'image/jpeg', 'image/png', 'image/webp', 'image/gif']
+
+    if (!allowed.includes(file.type)) return 'รองรับเฉพาะไฟล์ .mp4 หรือไฟล์ภาพ (JPG, PNG, WEBP, GIF)'
     if (file.size > maxSize) return 'ขนาดไฟล์ต้องไม่เกิน 120MB'
+
     return null
   }
 
-  // ---- Upload Logic
   const handleFileUpload = useCallback(
     (files: FileList | null) => {
       if (!files) return
-      setUploadError('')
-      const newFiles: UploadedFile[] = []
-      Array.from(files).forEach((file: File) => {
-        const error = validateFile(file)
-        if (error) {
-          setUploadError(error)
+      const next: UploadedFile[] = []
+      const errs: string[] = []
+      const dedupe = new Set(uploadedFiles.map(f => `${f.name}__${f.size}`))
+
+      Array.from(files).forEach(file => {
+        const err = validateFile(file)
+
+        if (err) {
+          errs.push(`${file.name}: ${err}`)
+
           return
         }
-        const uploadedFile: UploadedFile = {
+
+        const sig = `${file.name.replace(/\.[^/.]+$/, '')}__${file.size}`
+
+        if (dedupe.has(sig)) {
+          errs.push(`${file.name}: มีไฟล์ซ้ำในรายการอัปโหลด`)
+
+          return
+        }
+
+        next.push({
           file,
           name: file.name.replace(/\.[^/.]+$/, ''),
           size: file.size,
           type: file.type,
           preview: URL.createObjectURL(file)
-        }
-        newFiles.push(uploadedFile)
+        })
+        dedupe.add(sig)
       })
-      setUploadedFiles(prev => [...prev, ...newFiles])
-      if (newFiles.length > 0) console.log('Uploaded Files:', newFiles)
+
+      setUploadedFiles(prev => [...prev, ...next])
+      setUploadErrors(errs)
     },
-    [setUploadedFiles]
+    [setUploadedFiles, uploadedFiles]
   )
+
+  // cleanup object URLs on unmount
+  useEffect(() => {
+    return () => {
+      uploadedFiles.forEach(f => {
+        if (f.preview?.startsWith('blob:')) URL.revokeObjectURL(f.preview)
+      })
+    }
+  }, []) // eslint-disable-line
 
   const handleFileInputChange = (event: ChangeEvent<HTMLInputElement>) => {
     handleFileUpload(event.target.files)
@@ -222,6 +286,7 @@ const StepPropertyDetails = ({
 
   const handleDragOver = (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault()
+    event.dataTransfer.dropEffect = 'copy'
     setIsDragging(true)
   }
 
@@ -238,150 +303,92 @@ const StepPropertyDetails = ({
 
   const handleRemoveFile = (index: number) => {
     setUploadedFiles(prev => {
-      const newFiles = [...prev]
-      if (newFiles[index].preview) URL.revokeObjectURL(newFiles[index].preview!)
-      newFiles.splice(index, 1)
-      return newFiles
+      const copy = [...prev]
+      const target = copy[index]
+
+      if (target?.preview?.startsWith('blob:')) URL.revokeObjectURL(target.preview)
+      copy.splice(index, 1)
+
+      return copy
     })
   }
 
-  // ---- Orientation
+  const handleRemoveAll = () => {
+    setUploadedFiles(prev => {
+      prev.forEach(f => f.preview?.startsWith('blob:') && URL.revokeObjectURL(f.preview))
+
+      return []
+    })
+  }
+
+  // ===== Orientation =====
   const handleOrientationChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const value = event.target.value as 'landscape' | 'portrait'
+
     onOrientationChange?.(value)
   }
 
-  // ---- Format file size
-  const formatFileSize = (bytes: number): string => {
-    if (bytes === 0) return '0 Bytes'
-    const k = 1024
-    const sizes = ['Bytes', 'KB', 'MB', 'GB']
-    const i = Math.floor(Math.log(bytes) / Math.log(k))
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
-  }
+  // ===== Old files (library) =====
+  const handleOldFilesClick = useCallback(async () => {
+    const willExpand = !showOldFiles
 
-  // ---- Edit file name
-  const [editingIndex, setEditingIndex] = useState<number | null>(null)
-  const [newFileName, setNewFileName] = useState<string>('')
-  const handleEditClick = (index: number) => {
-    setEditingIndex(index)
-    setNewFileName(uploadedFiles[index].name)
-  }
-  const handleSave = () => {
-    if (editingIndex !== null) {
-      const sanitizedName = newFileName.replace(/[^a-zA-Z0-9 _-]/g, '')
+    setShowOldFiles(willExpand)
+    if (!willExpand) return
 
-      setUploadedFiles(prev => {
-        const updatedFiles = [...prev]
-        updatedFiles[editingIndex].name = sanitizedName
-        return updatedFiles
-      })
-
-      setEditingIndex(null)
-    }
-  }
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') handleSave()
-  }
-  const handleCancel = () => setEditingIndex(null)
-
-  // ---- Upload via Proxy
-  const uploadViaProxy = async () => {
-    const formData = new FormData()
-    uploadedFiles.forEach((file, index) => {
-      formData.append(`media[${index}].name`, file.name)
-      formData.append(`media[${index}].comments`, file.comments || '')
-      formData.append(`media[${index}].file`, file.file)
-    })
     try {
-      const res = await axios.post('/api/auth/upload-media', formData, {
+      const res = await fetch('/api/auth/media', {
+        method: 'GET',
         headers: {
-          'Content-Type': 'multipart/form-data',
-          Authorization: `Bearer ${Cookies.get('accessToken')}`
+          Authorization: `Bearer ${Cookies.get('accessToken')}`,
+          'Content-Type': 'application/json'
         }
       })
-      if (res.data.success && Array.isArray(res.data.data)) {
-        ;(res.data.data as MediaItem[]).forEach((item: MediaItem) => {
-          console.log('[📦 Uploaded]', {
-            id: item.id,
-            title: item.title,
-            type: item.type,
-            fileUrl: item.fileUrl,
-            fileSize: item.fileSize
-          })
-        })
-      } else {
-        console.warn('[❗️ Upload failed]', res.data.message, res.data.raw)
-      }
-    } catch (err: any) {
-      console.error('❌ Upload via proxy failed:', err?.response?.data?.message ?? err.message, err)
-    }
-  }
 
-  const checkUploadedFileStatus = async () => {
-    if (uploadedFiles.length > 0) {
-      await uploadViaProxy()
-    } else {
-      console.log('2') // ไม่มีการอัปโหลดไฟล์
-    }
-  }
+      if (!res.ok) {
+        console.error('Failed to fetch old files')
 
-  // ---- Old file & Media select
-  const handleOldFilesClick = async () => {
-    setShowOldFiles(!showOldFiles)
-    if (!showOldFiles) {
-      try {
-        const res = await fetch('/api/auth/media', {
-          method: 'GET',
-          headers: {
-            Authorization: `Bearer ${Cookies.get('accessToken')}`,
-            'Content-Type': 'application/json'
-          }
-        })
-        if (res.ok) {
-          const data = await res.json()
-          const files = data?.data?.data?.media || []
-          setOldFiles(files)
-          console.log('Old files:', files)
-        } else {
-          console.error('Failed to fetch old files')
-        }
-      } catch (err) {
-        console.error('Error fetching old files', err)
+        return
       }
+
+      const data = await res.json()
+
+      // tolerate different shapes
+      const files: MediaItem[] = data?.data?.data?.media || data?.data?.media || data?.media || data?.data || []
+
+      setOldFiles(Array.isArray(files) ? files : [])
+    } catch (err) {
+      console.error('Error fetching old files', err)
     }
-  }
+  }, [showOldFiles, setOldFiles])
 
   const handleSelect = (id: number) => {
-    setSelected(prev => (prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id]))
+    setSelected(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]))
   }
 
-  const handleTabChange = (event: React.SyntheticEvent, newValue: string) => setTabValue(newValue)
-  const videoFiles = oldFiles.filter((item: MediaItem) => item.type === 'video' && item.status === 1)
-  const imageFiles = oldFiles.filter((item: MediaItem) => item.type === 'image' && item.status === 1)
+  const videoFiles = useMemo(() => oldFiles.filter(it => it.type === 'video' && it.status === 1), [oldFiles])
+  const imageFiles = useMemo(() => oldFiles.filter(it => it.type === 'image' && it.status === 1), [oldFiles])
+
+  const handleTabChange = (_: React.SyntheticEvent, val: string) => setTabValue(val)
 
   const renderMediaGrid = (mediaItems: MediaItem[]) => (
     <Grid container spacing={3}>
-      {mediaItems.map((item: MediaItem) => (
+      {mediaItems.map(item => (
         <Grid size={{ xs: 12, sm: 6, md: 4, lg: 3 }} key={item.id}>
           <Card
+            onClick={() => handleSelect(item.id)}
             sx={{
               position: 'relative',
               height: '100%',
-              transition: 'all 0.3s ease',
+              transition: 'all 0.2s ease',
               cursor: 'pointer',
               border: selected.includes(item.id) ? 2 : 1,
               borderColor: selected.includes(item.id) ? 'primary.main' : 'divider',
-              '&:hover': {
-                transform: 'translateY(-4px)',
-                boxShadow: 6
-              }
+              '&:hover': { transform: 'translateY(-2px)', boxShadow: 4 }
             }}
           >
             <Checkbox
               checked={selected.includes(item.id)}
-              onChange={e => handleSelect(item.id)}
+              onChange={() => handleSelect(item.id)}
               onClick={e => e.stopPropagation()}
               sx={{
                 position: 'absolute',
@@ -394,7 +401,6 @@ const StepPropertyDetails = ({
                 '&:hover': { bgcolor: 'background.paper' }
               }}
             />
-
             <Box sx={{ position: 'relative', height: 200, bgcolor: 'grey.100', overflow: 'hidden' }}>
               <img
                 src={`${cloud}${item.thumbnailUrl || item.fileUrl}`}
@@ -416,6 +422,7 @@ const StepPropertyDetails = ({
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap'
                 }}
+                title={item.title}
               >
                 {item.title}
               </Typography>
@@ -426,30 +433,79 @@ const StepPropertyDetails = ({
     </Grid>
   )
 
-  // ---- Ad Name/Desc Change
-  const handleAdNameChange = (event: ChangeEvent<HTMLInputElement>) => setAdName(event.target.value)
-  const handleAdDescriptionChange = (event: ChangeEvent<HTMLInputElement>) => setAdDescription(event.target.value)
+  // ===== Ad name/desc =====
+  const handleAdNameChange = (e: ChangeEvent<HTMLInputElement>) => setAdName(e.target.value)
+  const handleAdDescriptionChange = (e: ChangeEvent<HTMLInputElement>) => setAdDescription(e.target.value)
 
-  // ---- Validation before next
-  const handleNextWithValidation = async () => {
+  // ===== Inline rename =====
+  const handleEditClick = (index: number) => {
+    setEditingIndex(index)
+    setNewFileName(uploadedFiles[index].name)
+  }
+
+  const handleSave = () => {
+    if (editingIndex === null) return
+    const sanitized = newFileName.replace(/[^a-zA-Z0-9 _-]/g, '').trim()
+
+    if (!sanitized) return setEditingIndex(null)
+    setUploadedFiles(prev => {
+      const updated = [...prev]
+
+      updated[editingIndex].name = sanitized
+
+      return updated
+    })
+    setEditingIndex(null)
+  }
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') handleSave()
+    if (e.key === 'Escape') setEditingIndex(null)
+  }
+
+  const handleCancel = () => setEditingIndex(null)
+
+  // ===== Upload via Proxy (optional trigger elsewhere)
+
+  // ===== Helpers =====
+  const formatFileSize = (bytes: number): string => {
+    if (!bytes) return '0 Bytes'
+    const k = 1000
+    const sizes = ['Bytes', 'KB', 'MB', 'GB']
+    const i = Math.floor(Math.log(bytes) / Math.log(k))
+
+    return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`
+  }
+
+  const handleNextWithValidation = () => {
     if (!adName.trim()) {
       alert('กรุณากรอกชื่อกำหนดการ')
+
       return
     }
+
     if (uploadedFiles.length === 0 && selected.length === 0) {
       alert('กรุณาอัพโหลดหรือเลือกไฟล์จากรายการเก่าอย่างน้อย 1 รายการ')
+
       return
     }
+
     handleNext()
   }
 
+  // ===== Render =====
   return (
     <Grid container spacing={6}>
       <Grid size={{ xs: 12, md: 12 }}>
-        <Typography variant='h4' component='h2' sx={{ color: 'text.primary', mb: 2 }}>
-          เลือกกลุ่มทีวี
-        </Typography>
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 2 }}>
+          <Typography variant='h4' component='h2' sx={{ color: 'text.primary', mb: 2 }}>
+            เลือกกลุ่มทีวี
+          </Typography>
+          {/* <StorageBar used={usedByteInGB} max={maxStorage} /> */}
+        </Box>
       </Grid>
+
+      {/* Orientation */}
       <Grid size={{ xs: 12, md: 12 }}>
         <RadioGroup value={orientation} onChange={handleOrientationChange} sx={{ gap: 2 }}>
           {orientationOptions.map(option => (
@@ -461,30 +517,23 @@ const StepPropertyDetails = ({
             >
               <Box
                 sx={{
-                  padding: '20px ',
+                  p: '20px',
                   position: 'relative',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'space-around',
-                  zIndex: 1
+                  gap: 20
                 }}
               >
                 <Box display='flex' alignItems='center' gap={2}>
                   <FormControlLabel
                     value={option.id}
-                    control={
-                      <Radio
-                        sx={{
-                          p: 0,
-                          '&.Mui-checked': { color: 'success.main' }
-                        }}
-                      />
-                    }
+                    control={<Radio sx={{ p: 0, '&.Mui-checked': { color: 'success.main' } }} />}
                     label=''
                     sx={{ m: 0 }}
                   />
                   <Box>
-                    <Typography variant='h3' component='h1' sx={{ fontWeight: 600, mb: 0.5 }}>
+                    <Typography variant='h3' sx={{ fontWeight: 600, mb: 0.5 }}>
                       {option.titleTh}
                     </Typography>
                     <Typography variant='h4' sx={{ color: 'text.secondary', mb: 1 }}>
@@ -495,23 +544,24 @@ const StepPropertyDetails = ({
                     </Typography>
                   </Box>
                 </Box>
-                <Box sx={{ flexShrink: 0, display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+
+                <Box
+                  sx={{
+                    flexShrink: 0,
+                    display: 'flex',
+                    justifyContent: 'center',
+                    alignItems: 'center',
+                    position: 'relative'
+                  }}
+                >
                   <img
                     src={option.isLandscape ? '/images/tv/Landscape.svg' : '/images/tv/Portrait.svg'}
                     height='200'
                     width='200'
                     style={{ pointerEvents: 'none' }}
+                    alt={option.titleEn}
                   />
-                  <Box
-                    sx={{
-                      position: 'absolute',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      pointerEvents: 'none',
-                      marginTop: '-20px'
-                    }}
-                  >
+                  <Box sx={{ position: 'absolute', bottom: 100 }}>
                     <Typography variant='caption' sx={{ fontWeight: 600, color: 'grey.600' }}>
                       {option.aspectRatio}
                     </Typography>
@@ -522,6 +572,97 @@ const StepPropertyDetails = ({
           ))}
         </RadioGroup>
       </Grid>
+
+      {/* Old Files */}
+      <Grid size={{ xs: 12 }}>
+        <OldFilesZone isExpanded={showOldFiles} onClick={handleOldFilesClick}>
+          <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, fontSize: '2.5rem', color: 'secondary.main' }}>
+              <Icon icon='mdi:folder-multiple' />
+              <Typography variant='h5' sx={{ color: 'text.secondary' }}>
+                เลือกไฟล์จากคลัง
+              </Typography>
+            </Box>
+
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+              <Chip label={`${oldFiles.length} ไฟล์ทั้งหมด`} color='secondary' variant='outlined' size='small' />
+              {selected.length > 0 && (
+                <Chip label={`${selected.length} ไฟล์ที่เลือก`} color='primary' variant='filled' size='small' />
+              )}
+            </Box>
+
+            <Typography variant='body2' sx={{ color: 'text.disabled', mt: 1 }}>
+              {showOldFiles ? 'คลิกเพื่อซ่อนรายการไฟล์' : 'คลิกเพื่อแสดงไฟล์ที่อัพโหลดไว้แล้ว'}
+            </Typography>
+          </Box>
+        </OldFilesZone>
+
+        {showOldFiles && oldFiles.length > 0 && (
+          <Box sx={{ borderRadius: 2, overflow: 'hidden', mb: 2, backgroundColor: 'background.paper', boxShadow: 2 }}>
+            <TabContext value={tabValue}>
+              <Box
+                sx={{
+                  borderBottom: 1,
+                  borderColor: 'divider',
+                  position: 'sticky',
+                  top: 0,
+                  bgcolor: 'background.paper',
+                  zIndex: 1
+                }}
+              >
+                <TabList onChange={handleTabChange} variant='fullWidth'>
+                  <Tab
+                    value='1'
+                    label={
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <VideoIcon />
+                        <span>วิดีโอ</span>
+                        <Chip label={videoFiles.length} size='small' color='primary' variant='outlined' />
+                      </Box>
+                    }
+                    sx={{ textTransform: 'none', fontWeight: 600 }}
+                  />
+                  <Tab
+                    value='2'
+                    label={
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <ImageIcon />
+                        <span>รูปภาพ</span>
+                        <Chip label={imageFiles.length} size='small' color='secondary' variant='outlined' />
+                      </Box>
+                    }
+                    sx={{ textTransform: 'none', fontWeight: 600 }}
+                  />
+                </TabList>
+              </Box>
+
+              <TabPanel value='1' sx={{ p: 3, maxHeight: 400, overflow: 'auto' }}>
+                {videoFiles.length > 0 ? (
+                  renderMediaGrid(videoFiles)
+                ) : (
+                  <Box sx={{ textAlign: 'center', py: 4 }}>
+                    <VideoIcon sx={{ fontSize: 48, color: 'text.disabled', mb: 2 }} />
+                    <Typography color='text.secondary'>ไม่มีไฟล์วิดีโอ</Typography>
+                  </Box>
+                )}
+              </TabPanel>
+
+              <TabPanel value='2' sx={{ p: 3, maxHeight: 400, overflow: 'auto' }}>
+                {imageFiles.length > 0 ? (
+                  renderMediaGrid(imageFiles)
+                ) : (
+                  <Box sx={{ textAlign: 'center', py: 4 }}>
+                    <ImageIcon sx={{ fontSize: 48, color: 'text.disabled', mb: 2 }} />
+                    <Typography color='text.secondary'>ไม่มีไฟล์รูปภาพ</Typography>
+                  </Box>
+                )}
+              </TabPanel>
+            </TabContext>
+          </Box>
+        )}
+      </Grid>
+
+      {/* Upload zone */}
       <Grid size={{ xs: 12, md: 12 }}>
         <input
           ref={fileInputRef}
@@ -533,11 +674,13 @@ const StepPropertyDetails = ({
         />
         <UploadZone
           isDragging={isDragging}
-          hasError={!!uploadError}
+          hasError={uploadErrors.length > 0}
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
           onClick={() => fileInputRef.current?.click()}
+          role='button'
+          aria-label='อัปโหลดไฟล์'
         >
           <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
             <Box sx={{ display: 'flex', fontSize: '3rem', color: 'secondary.main', alignItems: 'center' }}>
@@ -546,151 +689,122 @@ const StepPropertyDetails = ({
                 ลากและวางไฟล์ที่นี่ หรือคลิกเพื่อเลือกไฟล์
               </Typography>
             </Box>
+            <Typography variant='body2' sx={{ color: 'text.disabled' }}>
+              รองรับไฟล์ภาพทุกชนิด และ .mp4, ขนาดวิดีโอไม่เกิน 120MB
+            </Typography>
           </Box>
         </UploadZone>
-        {uploadError && (
+
+        {uploadErrors.length > 0 && (
           <Alert severity='error' sx={{ mt: 2 }}>
-            {uploadError}
+            <strong>อัปโหลดบางไฟล์ไม่สำเร็จ:</strong>
+            <Box component='ul' sx={{ pl: 3, mb: 0 }}>
+              {uploadErrors.map((e, i) => (
+                <li key={i}>{e}</li>
+              ))}
+            </Box>
           </Alert>
         )}
-        {/* File Preview */}
+
+        {/* Uploaded list */}
         {uploadedFiles.map((file, index) => (
-          <FilePreview key={`${file.name}-${index}`}>
+          <FilePreview key={`${file.name}-${file.size}-${index}`}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-              <Box sx={{ fontSize: '1.5rem', color: 'primary.main' }}>
-                <i className={file.type.startsWith('image/') ? 'bx bx-image' : 'bx bx-video'} />
-              </Box>
+              {/* thumbnail */}
+              {file.type.startsWith('image/') ? (
+                <Box sx={{ width: 56, height: 56, overflow: 'hidden', borderRadius: 1, bgcolor: 'grey.100' }}>
+                  {file.preview && (
+                    <img
+                      src={file.preview}
+                      alt={file.name}
+                      style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                    />
+                  )}
+                </Box>
+              ) : (
+                <Box
+                  sx={{
+                    width: 56,
+                    height: 56,
+                    borderRadius: 1,
+                    display: 'grid',
+                    placeItems: 'center',
+                    bgcolor: 'grey.100',
+                    color: 'primary.main'
+                  }}
+                >
+                  <i className='bx bx-video' />
+                </Box>
+              )}
+
               <Box>
                 <Typography
                   variant='h6'
                   sx={{
-                    width: '450px',
+                    width: { xs: 200, sm: 320, md: 450 },
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
                     whiteSpace: 'nowrap'
                   }}
+                  title={file.name}
                 >
-                  {file.name.replace(/\.[^/.]+$/, '')}
+                  {file.name}
                 </Typography>
                 <Typography variant='caption' sx={{ color: 'text.secondary' }}>
                   {formatFileSize(file.size)}
                 </Typography>
               </Box>
             </Box>
-            <Box display='flex'>
+
+            <Box display='flex' alignItems='center' gap={1}>
               {editingIndex === index ? (
-                <Box
-                  sx={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'flex-end',
-                    width: '100%'
-                  }}
-                >
+                <>
                   <TextField
                     value={newFileName}
                     onChange={e => setNewFileName(e.target.value)}
                     variant='outlined'
                     size='small'
-                    sx={{ minWidth: '200px' }}
+                    sx={{ minWidth: { xs: 160, sm: 260, md: 300 } }}
                     onKeyDown={handleKeyDown}
+                    autoFocus
                   />
-                  <IconButton onClick={handleSave} color='success'>
+                  <IconButton onClick={handleSave} color='success' sx={{ ml: 0.5 }}>
                     <i className='bx bx-check' />
                   </IconButton>
                   <IconButton onClick={handleCancel} color='error'>
                     <i className='bx bx-x' />
                   </IconButton>
-                </Box>
+                </>
               ) : (
-                <Box
-                  sx={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'flex-end',
-                    width: '100%'
-                  }}
-                >
-                  <IconButton onClick={() => handleEditClick(index)} sx={{ color: 'error.main' }}>
+                <>
+                  <IconButton onClick={() => handleEditClick(index)} sx={{ color: 'warning.main' }} title='แก้ไขชื่อ'>
                     <i className='bx bx-edit' />
                   </IconButton>
-                  <IconButton onClick={() => handleRemoveFile(index)} sx={{ color: 'error.main' }}>
-                    <i className='bx bx-x' />
+                  <IconButton onClick={() => handleRemoveFile(index)} sx={{ color: 'error.main' }} title='ลบไฟล์นี้'>
+                    <i className='bx bx-trash' />
                   </IconButton>
-                </Box>
+                </>
               )}
             </Box>
           </FilePreview>
         ))}
-      </Grid>
-      <Grid size={{ xs: 12, md: 12 }}>
-        <Chip
-          label='รองรับไฟล์ภาพทุกชนิด และ .mp4, ขนาดวิดีโอที่อัพโหลดต้องไม่เกิน 120MB'
-          color='secondary'
-          variant='tonal'
-        />
-      </Grid>
-      {/* Old Files Section */}
-      <Grid size={{ xs: 12 }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
-          <Grid size={{ xs: 12 }}>
-            <Button variant='outlined' onClick={handleOldFilesClick} sx={{ width: '100%' }}>
-              <Icon icon='mdi:file' width={22} />
-              ไฟล์เก่า
-            </Button>
-            {/* <Button variant='outlined' onClick={checkUploadedFileStatus} sx={{ width: '100%', mt: 5 }}>
-              Check Upload Files Test
-            </Button> */}
-          </Grid>
-          {showOldFiles && (
-            <Chip
-              label={selected.length > 0 ? `${selected.length} selected` : `${oldFiles.length} items total`}
+
+        {uploadedFiles.length > 0 && (
+          <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: 1, gap: 1 }}>
+            <Button
+              size='small'
+              color='error'
               variant='outlined'
-              color={selected.length > 0 ? 'primary' : 'default'}
-              sx={{ ml: 5 }}
-            />
-          )}
-        </Box>
-        {/* Tabbed Media Selection */}
-        {showOldFiles && oldFiles.length > 0 && (
-          <Card sx={{ mb: 2 }}>
-            <TabContext value={tabValue}>
-              <Box sx={{ borderBottom: 1, borderColor: 'divider', mt: 2 }}>
-                <TabList onChange={handleTabChange} variant='fullWidth'>
-                  <Tab
-                    value='1'
-                    label={
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                        <VideoIcon />
-                        <span>Videos</span>
-                        <Chip label={videoFiles.length} size='small' color='primary' variant='outlined' />
-                      </Box>
-                    }
-                    sx={{ textTransform: 'none', fontWeight: 600 }}
-                  />
-                  <Tab
-                    value='2'
-                    label={
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                        <ImageIcon />
-                        <span>Images</span>
-                        <Chip label={imageFiles.length} size='small' color='secondary' variant='outlined' />
-                      </Box>
-                    }
-                    sx={{ textTransform: 'none', fontWeight: 600 }}
-                  />
-                </TabList>
-              </Box>
-              <TabPanel value='1' sx={{ p: 3 }}>
-                {videoFiles.length > 0 ? renderMediaGrid(videoFiles) : <Typography>ไม่มีวิดีโอ</Typography>}
-              </TabPanel>
-              <TabPanel value='2' sx={{ p: 3 }}>
-                {imageFiles.length > 0 ? renderMediaGrid(imageFiles) : <Typography>ไม่มีรูปภาพ</Typography>}
-              </TabPanel>
-            </TabContext>
-          </Card>
+              onClick={handleRemoveAll}
+              startIcon={<i className='bx bx-x' />}
+            >
+              ลบทั้งหมด
+            </Button>
+          </Box>
         )}
       </Grid>
+
+      {/* Ad Name/Desc */}
       <Grid size={{ xs: 12, md: 12 }}>
         <Typography variant='h5' component='h3' sx={{ color: 'text.primary', mb: 2 }}>
           <strong>กำหนดชื่อกำหนดการโฆษณา</strong>
@@ -716,6 +830,8 @@ const StepPropertyDetails = ({
           onChange={handleAdDescriptionChange}
         />
       </Grid>
+
+      {/* Footer */}
       {isInternalEdit && (
         <Grid size={{ xs: 12 }}>
           <div className='flex items-center justify-between'>

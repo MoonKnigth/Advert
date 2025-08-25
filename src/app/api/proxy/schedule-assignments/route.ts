@@ -13,7 +13,7 @@ export async function POST(req: Request) {
         const accessToken = authHeader.split(' ')[1]
         const body = await req.json()
 
-        const response = await fetch('https://signboard.softacular.net/api/schedule-assignments', {
+        const response = await fetch('https://signboard.softacular.net/api/schedule-assignments/create', {
             method: 'POST',
             headers: {
                 Authorization: `Bearer ${accessToken}`,

@@ -1,25 +1,47 @@
-import { useState, useEffect, ChangeEvent } from 'react' // Add ChangeEvent here
-import MenuItem from '@mui/material/MenuItem'
+// src/views/pages/wizard-examples/property-listing/StepPersonalDetails.tsx
+'use client'
+
+import { useState, useEffect, memo, useMemo, useCallback } from 'react'
+
+import dynamic from 'next/dynamic'
+
+import ArrowBackIcon from '@mui/icons-material/ArrowBack'
+import EventAvailableIcon from '@mui/icons-material/EventAvailable'
 import Checkbox from '@mui/material/Checkbox'
-import ListItemText from '@mui/material/ListItemText'
 import Alert from '@mui/material/Alert'
-import AppReactDatepicker from '@/libs/styles/AppReactDatepicker'
-import Radio from '@mui/material/Radio'
-import RadioGroup from '@mui/material/RadioGroup'
 import FormControlLabel from '@mui/material/FormControlLabel'
 import Grid from '@mui/material/Grid2'
 import Button from '@mui/material/Button'
-import DirectionalIcon from '@components/DirectionalIcon'
-import { Box, Chip, Dialog, DialogContent, DialogTitle } from '@mui/material'
-import CardMedia from '@mui/material/CardMedia'
-import CustomTextField from '@core/components/mui/TextField'
-import Typography from '@mui/material/Typography'
-import CardContent from '@mui/material/CardContent'
+import {
+  Box,
+  Card,
+  Chip,
+  Dialog,
+  DialogContent,
+  DialogTitle,
+  Typography,
+  CardContent,
+  CardMedia,
+  DialogActions,
+  MenuItem,
+  ListItemIcon,
+  ListItemText,
+  IconButton,
+  Menu
+} from '@mui/material'
 import Cookies from 'js-cookie'
-import { useTheme } from '@mui/material/styles'
-import { size } from '@floating-ui/react'
 
-// Define Props type
+import CustomAvatar from '@/@core/components/mui/Avatar'
+import CustomTextField from '@core/components/mui/TextField'
+import DirectionalIcon from '@components/DirectionalIcon'
+
+// -------- Lazy styles for the datepicker (Next.js ssr: false)
+const AppReactDatepicker = dynamic(() => import('@/libs/styles/AppReactDatepicker'), { ssr: false })
+
+// ======================================================
+// =============== Types & Shared Helpers ===============
+// ======================================================
+
 interface Props {
   activeStep: number
   handleNext: () => void
@@ -31,14 +53,746 @@ interface Props {
   setEndDateTime: React.Dispatch<React.SetStateAction<Date | null>>
   deviceInfo: any[]
   fetchDeviceInfo: () => void
-  mediaList: any[]
+  mediaList: any[] // จาก API /api/media
   scheduleList: any[]
   selectedDeviceIds: string[]
   setSelectedDeviceIds: React.Dispatch<React.SetStateAction<string[]>>
 }
 
-const ITEM_HEIGHT = 48
-const ITEM_PADDING_TOP = 8
+type AdsItem = {
+  id: number
+  title: string
+  type: 'image' | 'video' | string
+  duration: string | number
+  start_time?: string | null
+  ad_run_at?: string | null
+  ad_run_at_to?: string | null
+}
+
+type ScheduleDetail = {
+  id: number
+  scheduleNumber: string
+  name: string
+  playOrientation: 'HORIZONTAL' | 'VERTICAL' | string
+  runAt?: string
+  runAtTo?: string
+  adsItems: AdsItem[]
+}
+
+export type ScheduleLite = {
+  schedule_id: number | string
+  schedule_name: string
+  schedule_number: string
+  run_at?: string
+  run_at_to?: string
+}
+
+type MediaItem = {
+  id: number
+  title: string
+  description?: string
+  type: 'image' | 'video'
+  fileUrl: string
+  videoType?: string | null
+  thumbnailUrl?: string | null
+  width?: number | null
+  height?: number | null
+  duration?: number | null
+  fileSize?: number | null
+}
+
+const RAW_BASE = process.env.NEXT_PUBLIC_SIGNBOARD_BASE_URL ?? 'https://cloud.softacular.net'
+const BASE_URL = RAW_BASE.replace('http://', 'https://')
+const toAbs = (u?: string | null) => (!u ? '' : /^https?:\/\//i.test(u) ? u : `${BASE_URL}${u}`)
+const normalizeTitle = (t?: string) => (t || '').trim().toLowerCase()
+
+const normalizeMedia = (m: any): MediaItem => {
+  const typeRaw = (m?.type ?? m?.fileType ?? '').toString().toLowerCase()
+  const type: 'image' | 'video' = typeRaw === 'video' ? 'video' : 'image'
+
+  return {
+    id: Number(m?.id ?? m?.media_id ?? m?.mediaId ?? 0),
+    title: m?.title ?? m?.name ?? '',
+    description: m?.description ?? undefined,
+    type,
+    fileUrl: m?.fileUrl ?? m?.file_url ?? m?.url ?? '',
+    videoType: m?.videoType ?? m?.mime ?? null,
+    thumbnailUrl: m?.thumbnailUrl ?? m?.thumbnail_url ?? m?.thumb_url ?? undefined,
+    width: m?.width ?? null,
+    height: m?.height ?? null,
+    duration: m?.duration != null ? Number(m.duration) : null,
+    fileSize: m?.fileSize ?? null
+  }
+}
+
+const extractMediaArray = (payload: any): any[] => {
+  if (!payload) return []
+
+  const directCandidates: any[] = [
+    payload?.data?.media,
+    payload?.media,
+    payload?.data?.data,
+    payload?.data?.items,
+    payload?.items,
+    payload?.results
+  ]
+
+  for (const c of directCandidates) {
+    if (Array.isArray(c)) return c
+    if (c && typeof c === 'object' && Array.isArray(c.data)) return c.data
+  }
+
+  // deep scan fallback
+  const seen = new Set<any>()
+  const stack: any[] = [payload]
+
+  while (stack.length) {
+    const cur = stack.pop()
+
+    if (!cur || typeof cur !== 'object' || seen.has(cur)) continue
+    seen.add(cur)
+
+    if (Array.isArray(cur)) {
+      if (
+        cur.length > 0 &&
+        typeof cur[0] === 'object' &&
+        ('fileUrl' in cur[0] || 'file_url' in cur[0] || 'url' in cur[0] || 'title' in cur[0] || 'name' in cur[0])
+      ) {
+        return cur
+      }
+
+      continue
+    }
+
+    for (const v of Object.values(cur)) if (v && typeof v === 'object') stack.push(v)
+  }
+
+  return []
+}
+
+const formatDate = (dateString?: string | null) => {
+  if (!dateString) return 'ไม่ระบุ'
+  const d = new Date(dateString)
+
+  if (Number.isNaN(d.getTime())) return 'ไม่ระบุ'
+
+  return new Intl.DateTimeFormat('th-TH', {
+    timeZone: 'Asia/Bangkok',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).format(d)
+}
+
+const truncateText = (text: string, maxLength: number) => {
+  if (!text) return 'ไม่ทราบชื่อ'
+
+  return text.length > maxLength ? text.slice(0, maxLength) + '...' : text
+}
+
+// ======================================================
+// =============== Inline UI Components =================
+// ======================================================
+
+type ScheduleRowProps = {
+  data: ScheduleLite
+  variant?: 'today' | 'coming'
+  onOpen: (id: number | string) => void
+  onDelete: (id: number | string) => void
+}
+
+const ScheduleRow = memo(function ScheduleRow({ data, variant = 'coming', onOpen, onDelete }: ScheduleRowProps) {
+  const isToday = variant === 'today'
+
+  return (
+    <Box
+      onClick={() => onOpen(data.schedule_id)}
+      className='rounded p-4 flex items-center justify-between w-full'
+      sx={{
+        cursor: 'pointer',
+        mb: 3,
+        backgroundColor: isToday ? '#fff' : 'rgba(255, 62, 29, 0.08)',
+        border: isToday ? 'none' : '1px solid',
+        borderColor: isToday ? 'transparent' : 'primary.dark',
+        '&:hover': { backgroundColor: isToday ? '#f9fafb' : 'rgba(255, 62, 29, 0.12)' }
+      }}
+      role='button'
+      tabIndex={0}
+      onKeyDown={e => {
+        if (e.key === 'Enter' || e.key === ' ') onOpen(data.schedule_id)
+      }}
+    >
+      <div>
+        <Typography variant='h6'>{data.schedule_name}</Typography>
+        <Typography>รหัส: {data.schedule_number}</Typography>
+        <Typography>
+          {formatDate(data.run_at)} ถึง {formatDate(data.run_at_to)}
+        </Typography>
+      </div>
+
+      <i
+        className='bx bx-trash text-primary cursor-pointer'
+        onClick={e => {
+          e.stopPropagation()
+          onDelete(data.schedule_id)
+        }}
+      />
+    </Box>
+  )
+})
+
+type DeviceGridProps = {
+  deviceInfo: any[]
+  selectedDeviceIds: string[]
+  onToggleDevice: (deviceId: string) => void
+  onOpenDevice: (device: any) => void
+}
+
+const DeviceGrid = memo(function DeviceGrid({
+  deviceInfo,
+  selectedDeviceIds,
+  onToggleDevice,
+  onOpenDevice
+}: DeviceGridProps) {
+  if (!deviceInfo?.length) return <p>กำลังโหลดข้อมูล...</p>
+
+  return (
+    <Grid container spacing={2}>
+      {deviceInfo.map((device, index) => {
+        const hasSchedule =
+          device.__hasSchedule ||
+          device.schedules_today ||
+          (Array.isArray(device.schedules_coming) && device.schedules_coming.length > 0)
+
+        return (
+          <Grid size={{ xs: 3 }} key={device.device_id || index}>
+            <Box
+              onClick={() => onOpenDevice(device)}
+              sx={{
+                display: 'flex',
+                flexDirection: 'column',
+                justifyContent: 'center',
+                alignItems: 'center',
+                padding: 2,
+                mx: 5,
+                cursor: 'pointer',
+                '&:hover': { backgroundColor: '#fef2f2' }
+              }}
+            >
+              <div onClick={e => e.stopPropagation()}>
+                <FormControlLabel
+                  className='ms-5'
+                  label=''
+                  control={
+                    <Checkbox
+                      color='success'
+                      checked={selectedDeviceIds.includes(device.device_id)}
+                      onChange={() => onToggleDevice(device.device_id)}
+                    />
+                  }
+                />
+              </div>
+
+              <img
+                src={hasSchedule ? '/images/tv/Vector_red.svg' : '/images/tv/Vector.svg'}
+                height='100'
+                width='100'
+                alt=''
+              />
+              <p>{device.device_id}</p>
+              <p>{device.name || 'ไม่ทราบชื่อ'}</p>
+              <p>{truncateText(device.description, 15)}</p>
+            </Box>
+          </Grid>
+        )
+      })}
+    </Grid>
+  )
+})
+
+type DeviceDialogProps = {
+  open: boolean
+  onClose: () => void
+  selectedDevice: any | null
+  selectedDescription: string | null
+  onOpenSchedule: (id: number | string) => void
+  onDeleteSchedule: (id: number, type: 'today' | 'coming') => void
+  onDeviceUpdated?: (patch: { name: string; description: string; platform: string }) => void
+}
+
+const DeviceDialog = memo(function DeviceDialog({
+  open,
+  onClose,
+  selectedDevice,
+  selectedDescription,
+  onOpenSchedule,
+  onDeleteSchedule,
+  onDeviceUpdated
+}: DeviceDialogProps) {
+  const [openEditDevice, setOpenEditDevice] = useState(false)
+
+  const [editName, setEditName] = useState(selectedDevice?.name || '')
+  const [editPlatform, setEditPlatform] = useState(selectedDevice?.platform || '')
+  const [editDescription, setEditDescription] = useState(selectedDevice?.description || '')
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState('')
+
+  const deviceId = selectedDevice?.device_id
+
+  useEffect(() => {
+    if (openEditDevice && selectedDevice) {
+      setEditName(selectedDevice?.name || '')
+      setEditPlatform(selectedDevice?.platform || '')
+      setEditDescription(selectedDevice?.description || '')
+      setSaveError('')
+    }
+  }, [openEditDevice, selectedDevice])
+
+  const isUnchanged =
+    !!selectedDevice &&
+    editName === (selectedDevice?.name || '') &&
+    editPlatform === (selectedDevice?.platform || '') &&
+    editDescription === (selectedDevice?.description || '')
+
+  const canSave = !!deviceId && !!editName.trim() && !isUnchanged && !saving
+
+  const handleSave = async () => {
+    if (!deviceId) return
+    setSaving(true)
+    setSaveError('')
+
+    try {
+      const res = await fetch(`/api/auth/device/${encodeURIComponent(deviceId)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: editName.trim(),
+          description: editDescription.trim(),
+          platform: editPlatform.trim()
+        })
+      })
+
+      const json = await res.json().catch(() => ({}))
+
+      if (!res.ok || json?.success === false) {
+        throw new Error(json?.message || `อัปเดตไม่สำเร็จ (${res.status})`)
+      }
+
+      // แจ้งพ่อให้อัปเดต UI ต่อ (ถ้าส่ง callback มา)
+      onDeviceUpdated?.({
+        name: editName.trim(),
+        description: editDescription.trim(),
+        platform: editPlatform.trim()
+      })
+
+      setOpenEditDevice(false)
+    } catch (e: any) {
+      setSaveError(e?.message || 'เกิดข้อผิดพลาดระหว่างอัปเดตอุปกรณ์')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null)
+
+  const handleClick = (event: React.MouseEvent<HTMLElement>) => {
+    setAnchorEl(event.currentTarget)
+  }
+
+  const handleClose = () => {
+    setAnchorEl(null)
+  }
+
+  return (
+    <Dialog open={open} onClose={onClose} maxWidth='md' fullWidth>
+      <CardContent className='flex flex-col gap-4'>
+        <div className='flex justify-between items-center'>
+          <CardContent className='flex flex-col gap-4 p-0'>
+            <div className='flex items-center gap-3'>
+              <CustomAvatar variant='rounded' skin='light' color='primary' size={60}>
+                <i className='bx-tv' />
+              </CustomAvatar>
+              <div className='flex justify-between items-center'>
+                <div className='flex flex-col items-start'>
+                  <Typography variant='h6'>{selectedDevice?.name || 'ไม่ทราบชื่อ'}</Typography>
+                  <Typography variant='body2'>ID: {selectedDevice?.device_id}</Typography>
+                  <Typography variant='body2'>Description: {selectedDescription || 'ไม่มีข้อมูลอุปกรณ์'}</Typography>
+                </div>
+              </div>
+            </div>
+          </CardContent>
+          <Box>
+            <Chip label='กำหนดการวันนี้และที่กำลังจะมาถึง' color='secondary' variant='filled' />
+            <IconButton aria-label='more' aria-controls='long-menu' aria-haspopup='true' onClick={handleClick}>
+              <i className='bx-dots-vertical-rounded' />
+            </IconButton>
+            <Menu
+              keepMounted
+              elevation={0}
+              anchorEl={anchorEl}
+              id='customized-menu'
+              onClose={handleClose}
+              open={Boolean(anchorEl)}
+              anchorOrigin={{
+                vertical: 'bottom',
+                horizontal: 'center'
+              }}
+              transformOrigin={{
+                vertical: 'top',
+                horizontal: 'center'
+              }}
+            >
+              <MenuItem onClick={() => setOpenEditDevice(true)}>
+                <ListItemIcon>
+                  <i className='bx bx-edit' />
+                </ListItemIcon>
+                <ListItemText primary='แก้ไขข้อมูลอุปกรณ์' />
+              </MenuItem>
+              <MenuItem>
+                <ListItemIcon>
+                  <i className='bx bx-trash' />
+                </ListItemIcon>
+                <ListItemText primary='ลบข้อมูลอุปกรณ์' />
+              </MenuItem>
+            </Menu>
+          </Box>
+
+          {/* Dialog แก้ไขข้อมูลอุปกรณ์ */}
+          <Dialog open={openEditDevice} onClose={() => setOpenEditDevice(false)} maxWidth='sm' fullWidth>
+            <DialogTitle>แก้ไขข้อมูลอุปกรณ์</DialogTitle>
+            <DialogContent dividers>
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3, mt: 1 }}>
+                <CustomTextField
+                  fullWidth
+                  label='ชื่ออุปกรณ์'
+                  value={editName}
+                  onChange={e => setEditName(e.target.value)}
+                />
+                <CustomTextField
+                  fullWidth
+                  label='แพลตฟอร์ม (เช่น android)'
+                  value={editPlatform}
+                  onChange={e => setEditPlatform(e.target.value)}
+                />
+                <CustomTextField
+                  fullWidth
+                  label='คำอธิบายอุปกรณ์'
+                  value={editDescription}
+                  onChange={e => setEditDescription(e.target.value)}
+                  multiline
+                  rows={3}
+                />
+
+                {saveError && (
+                  <Alert severity='error' variant='filled'>
+                    {saveError}
+                  </Alert>
+                )}
+              </Box>
+            </DialogContent>
+            <DialogActions>
+              <Button onClick={() => setOpenEditDevice(false)} disabled={saving}>
+                ยกเลิก
+              </Button>
+              <Button variant='contained' onClick={handleSave} disabled={!canSave}>
+                {saving ? 'กำลังบันทึก...' : 'บันทึก'}
+              </Button>
+            </DialogActions>
+          </Dialog>
+        </div>
+      </CardContent>
+
+      <DialogContent sx={{ m: 0, p: 0 }}>
+        <Box sx={{ display: 'flex', flexDirection: 'column' }}>
+          {/* วันนี้ */}
+          <CardContent className='flex flex-col gap-y-4'>
+            <div className='plb-3 pli-4 flex flex-col gap-x-4 bg-actionHover rounded'>
+              <div className='flex justify-start my-3'>
+                <i className='bx-time-five' />
+                <Typography variant='h5' sx={{ ml: 2 }}>
+                  กำหนดการวันนี้ ({selectedDevice?.schedules_today ? 1 : 0} รายการ)
+                </Typography>
+              </div>
+
+              {selectedDevice?.schedules_today ? (
+                <ScheduleRow
+                  variant='today'
+                  data={{
+                    schedule_id: selectedDevice.schedules_today.schedule_id,
+                    schedule_name: selectedDevice.schedules_today.schedule_name,
+                    schedule_number: selectedDevice.schedules_today.schedule_number,
+                    run_at: selectedDevice.schedules_today.run_at,
+                    run_at_to: selectedDevice.schedules_today.run_at_to
+                  }}
+                  onOpen={onOpenSchedule}
+                  onDelete={id => onDeleteSchedule(Number(id), 'today')}
+                />
+              ) : (
+                <div className='mb-3 bg-white rounded p-4 flex items-center justify-center w-full'>
+                  <Typography color='text.disabled'>ไม่มีกำหนดการวันนี้</Typography>
+                </div>
+              )}
+            </div>
+          </CardContent>
+
+          {/* กำหนดการที่จะมาถึง */}
+          <CardContent className='flex flex-col' sx={{ color: 'info.light' }}>
+            <Box className='plb-3 pli-4 flex flex-col rounded' sx={{ backgroundColor: 'rgba(255, 62, 29, 0.08)' }}>
+              <div className='flex justify-start my-3'>
+                <EventAvailableIcon color='primary' sx={{ mr: 1 }} />
+                <Typography variant='h5' sx={{ ml: 2 }}>
+                  กำหนดการที่กำลังจะมาถึง ({selectedDevice?.schedules_coming?.length || 0} รายการ)
+                </Typography>
+              </div>
+
+              {selectedDevice?.schedules_coming && selectedDevice.schedules_coming.length > 0 ? (
+                selectedDevice.schedules_coming.map((s: any) => (
+                  <ScheduleRow
+                    key={s.schedule_id}
+                    variant='coming'
+                    data={{
+                      schedule_id: s.schedule_id,
+                      schedule_name: s.schedule_name,
+                      schedule_number: s.schedule_number,
+                      run_at: s.run_at,
+                      run_at_to: s.run_at_to
+                    }}
+                    onOpen={onOpenSchedule}
+                    onDelete={id => onDeleteSchedule(Number(id), 'coming')}
+                  />
+                ))
+              ) : (
+                <Box
+                  className='rounded p-4 flex items-center justify-center w-full'
+                  sx={{
+                    backgroundColor: 'rgba(255, 62, 29, 0.08)',
+                    borderColor: 'primary.dark',
+                    borderWidth: 1,
+                    borderStyle: 'solid'
+                  }}
+                >
+                  <Typography>ไม่มีกำหนดการที่กำลังจะมาถึง</Typography>
+                </Box>
+              )}
+            </Box>
+          </CardContent>
+        </Box>
+      </DialogContent>
+    </Dialog>
+  )
+})
+
+type ScheduleDetailDialogProps = {
+  open: boolean
+  onClose: () => void
+  scheduleDetail: ScheduleDetail | null
+  onOpenAsset: (item: AdsItem) => void
+}
+
+const ScheduleDetailDialog = memo(function ScheduleDetailDialog({
+  open,
+  onClose,
+  scheduleDetail,
+  onOpenAsset
+}: ScheduleDetailDialogProps) {
+  return (
+    <Dialog sx={{ p: 0, m: 0 }} open={open} onClose={onClose} maxWidth='md' fullWidth>
+      <Box mt={3} mx={3} mb={0} display='flex' justifyContent='space-between' alignItems={'center'}>
+        <Button
+          sx={{ borderRadius: '100%', width: 60, height: 60, m: 0, p: 0 }}
+          onClick={onClose}
+          aria-label='ปิดรายละเอียดกำหนดการ'
+        >
+          <ArrowBackIcon />
+        </Button>
+        <DialogTitle>รายละเอียดกำหนดการ</DialogTitle>
+      </Box>
+
+      <DialogContent sx={{ px: 0, minHeight: { xs: '60vh', md: 555 } }}>
+        {scheduleDetail ? (
+          <CardContent className='flex flex-col gap-4 pt-1'>
+            <CardContent className='flex flex-col gap-4 p-0'>
+              <div className='flex items-center gap-3 w-full'>
+                <CustomAvatar variant='rounded' skin='light' color='primary' size={60}>
+                  <i className='bx-time' style={{ fontSize: '36px' }} />
+                </CustomAvatar>
+                <div className='flex justify-between items-center '>
+                  <div className='flex flex-col items-start w-full'>
+                    <Typography variant='h3'>{scheduleDetail.name}</Typography>
+                    <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                      <Typography variant='body2'>ID: {scheduleDetail.id} |</Typography>
+                      <Typography variant='body2'>Schedule No : {scheduleDetail.scheduleNumber} |</Typography>
+                      <Typography variant='body2'>
+                        {formatDate(scheduleDetail.runAt || '')} ถึง {formatDate(scheduleDetail.runAtTo || '')} |
+                      </Typography>
+                      <Typography variant='body2'>Orientation: {scheduleDetail.playOrientation || '-'}</Typography>
+                    </Box>
+                  </div>
+                </div>
+              </div>
+
+              {/* Ads ของ schedule */}
+              <Box sx={{ p: 5, backgroundColor: 'rgb(133 146 163 / 0.1)', borderRadius: 2 }}>
+                <Typography variant='h6' sx={{ mb: 2 }}>
+                  รายการโฆษณา ({scheduleDetail.adsItems?.length || 0} รายการ)
+                </Typography>
+                <div className='grid grid-cols-1 md:grid-cols-2 gap-3'>
+                  {scheduleDetail.adsItems?.map(item => (
+                    <Card
+                      className='w-full'
+                      key={item.id}
+                      onClick={() => onOpenAsset(item)}
+                      sx={{
+                        borderRadius: 3,
+                        boxShadow: 1,
+                        cursor: 'pointer',
+                        borderLeftWidth: '3px',
+                        borderLeftStyle: 'solid',
+                        borderLeftColor:
+                          item.type === 'video' ? 'var(--mui-palette-primary-main)' : 'var(--mui-palette-success-main)',
+                        '&:hover': {
+                          transform: 'translateY(-2px)',
+                          transition: 'all 0.3s ease-in-out',
+                          borderLeftWidth: '3px',
+                          boxShadow: 'var(--mui-customShadows-xl)',
+                          marginBlockEnd: '-1px'
+                        }
+                      }}
+                    >
+                      <CardContent className='flex items-center gap-3'>
+                        <CustomAvatar
+                          skin='light'
+                          color={item.type === 'video' ? 'primary' : 'success'}
+                          variant='rounded'
+                          size={50}
+                        >
+                          <i
+                            className={item.type === 'video' ? 'bx bx-video' : 'bx bx-image'}
+                            style={{ fontSize: '24px' }}
+                          />
+                        </CustomAvatar>
+
+                        <div className='flex flex-col flex-1'>
+                          <Typography
+                            variant='subtitle1'
+                            sx={{ fontWeight: 600, lineHeight: 1.2 }}
+                            title={item.title || '(ไม่มีชื่อ)'}
+                          >
+                            {(() => {
+                              const t = item.title || '(ไม่มีชื่อ)'
+                              const a = Array.from(t)
+
+                              return a.length > 50 ? a.slice(0, 50).join('') + '…' : t
+                            })()}
+                          </Typography>
+
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
+                            <Chip
+                              label={item.type}
+                              size='small'
+                              color={item.type === 'video' ? 'primary' : 'success'}
+                            />
+                            <Typography variant='caption' color='text.secondary'>
+                              {String(item.duration)}s
+                            </Typography>
+                          </Box>
+
+                          {(item.ad_run_at || item.ad_run_at_to) && (
+                            <Typography variant='caption' color='text.secondary' sx={{ mt: 0.5 }}>
+                              {formatDate(item.ad_run_at || '')} ถึง {formatDate(item.ad_run_at_to || '')}
+                            </Typography>
+                          )}
+                        </div>
+
+                        <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                          <i className='bx bx-chevron-right' style={{ fontSize: '20px', color: '#666' }} />
+                        </Box>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              </Box>
+            </CardContent>
+          </CardContent>
+        ) : (
+          <Typography>กำลังโหลด...</Typography>
+        )}
+      </DialogContent>
+    </Dialog>
+  )
+})
+
+type AssetPreviewDialogProps = {
+  open: boolean
+  onClose: () => void
+  loading: boolean
+  error: string | null
+  title: string
+  src: string | null
+  type: 'image' | 'video' | null
+}
+
+const AssetPreviewDialog = memo(function AssetPreviewDialog({
+  open,
+  onClose,
+  loading,
+  error,
+  title,
+  src,
+  type
+}: AssetPreviewDialogProps) {
+  return (
+    <Dialog open={open} onClose={onClose} maxWidth='md' fullWidth>
+      <Box
+        sx={{
+          mt: 3,
+          mx: 3,
+          mb: 0,
+          display: 'grid',
+          gridTemplateColumns: '48px 1fr 48px',
+          alignItems: 'center'
+        }}
+      >
+        <Button
+          sx={{ borderRadius: '100%', width: 60, height: 60, m: 0, p: 0, justifySelf: 'start' }}
+          onClick={onClose}
+          aria-label='ปิดตัวอย่างสื่อ'
+        >
+          <ArrowBackIcon />
+        </Button>
+        <DialogTitle sx={{ m: 0, textAlign: 'center', justifySelf: 'center' }}>{title || 'ตัวอย่างสื่อ'}</DialogTitle>
+        <Box sx={{ width: 48, height: 48 }} />
+      </Box>
+
+      <DialogContent sx={{ mt: 1, minHeight: { xs: '60vh', md: 550 } }}>
+        {loading && <Typography>กำลังโหลด...</Typography>}
+        {error && <Alert severity='error'>{error}</Alert>}
+
+        {!loading && !error && src && type === 'image' && (
+          <Box sx={{ width: '100%', display: 'flex', justifyContent: 'center' }}>
+            <CardMedia
+              component='img'
+              image={src}
+              alt={title || 'image'}
+              sx={{ maxHeight: 500, objectFit: 'contain', borderRadius: 2 }}
+            />
+          </Box>
+        )}
+
+        {!loading && !error && src && type === 'video' && (
+          <video controls width='100%' style={{ maxHeight: 480 }} autoPlay>
+            <source src={src} type='video/mp4' />
+            Your browser does not support the video tag.
+          </video>
+        )}
+      </DialogContent>
+    </Dialog>
+  )
+})
+
+// ======================================================
+// ==================== Main Component ==================
+// ======================================================
 
 const StepPersonalDetails = ({
   activeStep,
@@ -52,633 +806,438 @@ const StepPersonalDetails = ({
   deviceInfo,
   fetchDeviceInfo,
   mediaList,
-  scheduleList,
   selectedDeviceIds,
   setSelectedDeviceIds
 }: Props) => {
-  const [error, setError] = useState('') // Store error message
+  const [error] = useState('')
+  const [mounted, setMounted] = useState(false)
 
-  const theme = useTheme()
-  const [selectedOption, setSelectedOption] = useState<string>('builder')
-  const [isPasswordShown, setIsPasswordShown] = useState<boolean>(false)
+  // device usage (quota)
+  const [deviceUsed, setDeviceUsed] = useState<number>(0)
+  const [maxDeviceUsed, setMaxDeviceUsed] = useState<number>(0)
+  const [, setIsLoading] = useState<boolean>(true)
 
-  // Toggle password visibility
-  const handleClickShowPassword = () => setIsPasswordShown(show => !show)
+  // device dialogs
+  const [openDialog, setOpenDialog] = useState(false)
+  const [selectedDevice, setSelectedDevice] = useState<any | null>(null)
+  const [selectedDescription, setSelectedDescription] = useState<string | null>(null)
+  const [hasScheduleCache, setHasScheduleCache] = useState<Record<string, boolean>>({})
 
-  // Handle option change (builder, owner, broker)
-  const handleOptionChange = (prop: string | ChangeEvent<HTMLInputElement>) => {
-    if (typeof prop === 'string') {
-      setSelectedOption(prop)
-    } else {
-      setSelectedOption((prop.target as HTMLInputElement).value)
-    }
-  }
+  // ✅ เก็บ patch แบบ optimistic ต่ออุปกรณ์ (key = device_id)
+  const [devicePatches, setDevicePatches] = useState<
+    Record<string, { name?: string; description?: string; platform?: string }>
+  >({})
 
-  // Fetch schedule assignments when the button is clicked
-  const fetchScheduleAssignments = async () => {
-    try {
-      // Get accessToken from cookies
-      const accessToken = Cookies.get('accessToken')
-      if (!accessToken) {
-        console.error('Access token is missing!')
-        return
+  useEffect(() => {
+    if (!Array.isArray(deviceInfo)) return
+
+    setHasScheduleCache(prev => {
+      const next = { ...prev }
+
+      for (const d of deviceInfo) {
+        const hasScheduleFields = 'schedules_today' in d || 'schedules_coming' in d
+
+        if (hasScheduleFields) {
+          const has =
+            Boolean(d?.schedules_today) || (Array.isArray(d?.schedules_coming) && d.schedules_coming.length > 0)
+
+          next[d.device_id] = has
+        } else if (next[d.device_id] === undefined) {
+          // ถ้ายังไม่เคยรู้สถานะมาก่อน ให้ตั้งต้นเป็น false
+          next[d.device_id] = false
+        }
       }
 
-      // Log the token to ensure it's being fetched properly
-      // console.log('Access token:', accessToken)
+      return next
+    })
+  }, [deviceInfo])
 
-      const res = await fetch('/api/auth/schedule-assignments', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${accessToken}`, // Include the token in the Authorization header
-          'Content-Type': 'application/json'
+  // ✅ รวม deviceInfo จาก props + overlay patch เพื่อให้ Grid เห็นค่าล่าสุดทันที
+  const deviceInfoView = useMemo(() => {
+    if (!deviceInfo?.length) return deviceInfo
+
+    return deviceInfo.map(d => {
+      const p = devicePatches[d.device_id]
+      const hasFromCache = hasScheduleCache[d.device_id]
+
+      const hasFromFields =
+        Boolean(d?.schedules_today) || (Array.isArray(d?.schedules_coming) && d.schedules_coming.length > 0)
+
+      return {
+        ...d,
+        name: p?.name ?? d.name,
+        description: p?.description ?? d.description,
+        platform: p?.platform ?? d.platform,
+        __hasSchedule: hasFromCache ?? hasFromFields // ใช้แคชก่อน ถ้าไม่มีค่อย fallback ฟิลด์
+      }
+    })
+  }, [deviceInfo, devicePatches, hasScheduleCache])
+
+  useEffect(() => {
+    if (!deviceInfo?.length) return
+
+    // เคลียร์เฉพาะ patch ที่ device ไม่มีอยู่แล้วใน deviceInfo
+    setDevicePatches(prev => {
+      const deviceIds = new Set(deviceInfo.map(d => d.device_id))
+      const newPatches: typeof prev = {}
+
+      // เก็บเฉพาะ patch ของ device ที่ยังอยู่
+      Object.entries(prev).forEach(([deviceId, patch]) => {
+        if (deviceIds.has(deviceId)) {
+          // ✅ เช็คว่าข้อมูลใน deviceInfo อัปเดตแล้วหรือยัง
+          const device = deviceInfo.find(d => d.device_id === deviceId)
+
+          if (device) {
+            const needsPatch =
+              (patch.name && device.name !== patch.name) ||
+              (patch.description && device.description !== patch.description) ||
+              (patch.platform && device.platform !== patch.platform)
+
+            // เก็บ patch ไว้ถ้ายังไม่ sync กับ server
+            if (needsPatch) {
+              newPatches[deviceId] = patch
+            }
+          }
         }
       })
 
-      const text = await res.text() // Read response as text
-      // console.log('API Response:', text) // Log the raw response for debugging
+      return newPatches
+    })
+  }, [deviceInfo])
 
-      // Check if response is ok
-      if (res.ok) {
-        let data
-        try {
-          data = JSON.parse(text) // Try to parse JSON response
-          // console.log('Parsed Data:', data)
-        } catch (e) {
-          console.error('Failed to parse JSON:', e)
-        }
-      } else {
-        console.error('Error fetching API:', text) // Log error message from API
-      }
-    } catch (error) {
-      console.error('Unexpected error:', error) // Catch unexpected errors
-    }
-  }
+  const handleDeviceUpdated = useCallback(
+    (patch: { name: string; description: string; platform: string }) => {
+      const id = selectedDevice?.device_id
 
-  const [openDialog, setOpenDialog] = useState(false)
-  const [selectedDescription, setSelectedDescription] = useState<string | null>(null)
-  const [selectedScheduleName, setSelectedScheduleName] = useState<string | null>(null)
-  const [selectedScheduleDetail, setSelectedScheduleDetail] = useState<any | null>(null)
-  const [selectedNameAd, setSelectedNameAd] = useState<string | null>(null)
-  const [selectedAdsItems, setSelectedAdsItems] = useState<any[]>([])
+      if (!id) return
 
+      // 1) อัปเดต dialog ที่เปิดอยู่ทันที
+      setSelectedDevice((prev: any) => (prev ? { ...prev, ...patch } : prev))
+
+      // ถ้าอยากให้บรรทัด Description บนหัว dialog อัปเดตด้วย
+      setSelectedDescription(prev => (typeof patch.description === 'string' ? patch.description : prev))
+
+      // 2) อัปเดต Grid ทันที
+      setDevicePatches(prev => ({ ...prev, [id]: { ...(prev[id] || {}), ...patch } }))
+
+      // 3) revalidate เบื้องหลัง
+      fetchDeviceInfo?.()
+    },
+    [selectedDevice, fetchDeviceInfo]
+  )
+
+  // schedule detail dialog
+  const [scheduleDetail, setScheduleDetail] = useState<ScheduleDetail | null>(null)
+  const [openDetailDialog, setOpenDetailDialog] = useState(false)
+
+  // asset preview
+  const [openAssetDialog, setOpenAssetDialog] = useState(false)
+  const [assetLoading, setAssetLoading] = useState(false)
+  const [assetError, setAssetError] = useState<string | null>(null)
+  const [assetTitle, setAssetTitle] = useState<string>('')
+  const [assetType, setAssetType] = useState<'image' | 'video' | null>(null)
+  const [assetSrc, setAssetSrc] = useState<string | null>(null)
+
+  // mounted
+
+  useEffect(() => setMounted(true), [])
+
+  // quota
   useEffect(() => {
-    console.log('🖥️ ข้อมูลอุปกรณ์ทั้งหมด (deviceInfo):', deviceInfo)
-  })
+    const fetchDeviceUsage = async () => {
+      try {
+        setIsLoading(true)
+        const accessToken = Cookies.get('accessToken')
 
-  // ปรับแก้ฟังก์ชัน handleBoxClick เพื่อแสดง adsItems.title และ adsItems.description
-  const handleBoxClick = async (device: any) => {
-    if (device.schedules_today) {
-      const scheduleId = device.schedules_today.scheduleId
+        if (!accessToken) {
+          setDeviceUsed(0)
+          setMaxDeviceUsed(0)
 
-      console.log('🔍 Debug Info:')
-      console.log('Device:', device)
-      console.log('Schedule ID:', scheduleId)
-      console.log('Schedule List:', scheduleList)
+          return
+        }
 
-      // หา schedule ใน scheduleList
-      const schedule = scheduleList.find((s: any) => s.id === scheduleId)
-      console.log('Found Schedule:', schedule)
+        const response = await fetch('/api/proxy/device-usage', {
+          method: 'GET',
+          headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' }
+        })
 
-      // รายละเอียดอุปกรณ์
-      setSelectedDescription(device.description || 'ไม่ทราบชื่อ')
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
+        const result = await response.json()
 
-      // ชื่อกำหนดการ - เอามาจาก scheduleName
-      setSelectedScheduleName(device.schedules_today.scheduleName || 'ไม่มีตารางวันนี้')
+        if (result.success && result.data) {
+          setDeviceUsed(result.data.device_used || 0)
+          setMaxDeviceUsed(result.data.max_devices || 0)
+        } else {
+          setDeviceUsed(0)
+          setMaxDeviceUsed(0)
+        }
+      } catch {
+        setDeviceUsed(0)
+        setMaxDeviceUsed(0)
+      } finally {
+        setIsLoading(false)
+      }
+    }
 
-      // ถ้าไม่มี schedule ใน scheduleList ให้ดึงข้อมูลใหม่
-      if (!schedule) {
-        console.log('⚠️ Schedule not found in list, fetching from API...')
-        try {
+    fetchDeviceUsage()
+  }, [])
+
+  // media index (normalized)
+  const normalizedMedia: MediaItem[] = useMemo(() => {
+    const raw = Array.isArray(mediaList) ? mediaList : []
+    const norm = raw.map(normalizeMedia)
+
+    return norm
+  }, [mediaList])
+
+  const mediaById = useMemo(() => {
+    const map = new Map<number, MediaItem>()
+
+    normalizedMedia.forEach(m => map.set(Number(m.id), m))
+
+    return map
+  }, [normalizedMedia])
+
+  const mediaByTitleType = useMemo(() => {
+    const map = new Map<string, MediaItem[]>()
+
+    normalizedMedia.forEach(m => {
+      const key = `${normalizeTitle(m.title)}|${m.type}`
+      const arr = map.get(key) || []
+
+      arr.push(m)
+      map.set(key, arr)
+    })
+
+    return map
+  }, [normalizedMedia])
+
+  const resolveMediaForItem = useCallback(
+    (item: AdsItem): { media?: MediaItem; matchedBy?: string } => {
+      const anyItem = item as any
+
+      // 1) mediaId/media_id
+      const mid: number | string | undefined = anyItem.mediaId ?? anyItem.media_id
+
+      if (mid != null) {
+        const m = mediaById.get(Number(mid))
+
+        if (m) return { media: m, matchedBy: 'mediaId/media_id' }
+      }
+
+      // 2) adsItem.id === media.id
+      const idMatch = mediaById.get(Number(item.id))
+
+      if (idMatch) return { media: idMatch, matchedBy: 'adsItem.id === media.id' }
+
+      // 3) title+type(+duration)
+      const key = `${normalizeTitle(item.title)}|${String(item.type).toLowerCase() === 'video' ? 'video' : 'image'}`
+      const candidates = mediaByTitleType.get(key) || []
+
+      if (candidates.length === 0) return { media: undefined, matchedBy: undefined }
+
+      if (String(item.type).toLowerCase() === 'video' && item.duration != null) {
+        const target = Number(item.duration)
+        let best = candidates[0]
+        let bestDiff = Math.abs((best.duration ?? target) - target)
+
+        for (const c of candidates) {
+          const diff = Math.abs((c.duration ?? target) - target)
+
+          if (diff < bestDiff) {
+            best = c
+            bestDiff = diff
+          }
+        }
+
+        return { media: best, matchedBy: 'title+type+duration' }
+      }
+
+      return { media: candidates[0], matchedBy: 'title+type' }
+    },
+    [mediaById, mediaByTitleType]
+  )
+
+  // ---------- actions ----------
+  const handleToggleDevice = useCallback(
+    (deviceId: string) => {
+      setSelectedDeviceIds(prev => (prev.includes(deviceId) ? prev.filter(id => id !== deviceId) : [...prev, deviceId]))
+    },
+    [setSelectedDeviceIds]
+  )
+
+  const handleOpenDevice = useCallback(async (device: any) => {
+    setSelectedDevice(device)
+    setSelectedDescription(device.description || device.name || 'ไม่ทราบชื่อ')
+
+    // (เราดึง ads ของวันนี้เมื่อเปิด schedule detail แทน — เพื่อลดภาระตอนเปิด dialog อุปกรณ์)
+    setOpenDialog(true)
+  }, [])
+
+  const handleRemoveSchedule = useCallback((scheduleId: number, scheduleType: 'today' | 'coming') => {
+    console.log(`🗑️ ลบ ${scheduleType} schedule ID: ${scheduleId}`)
+
+    // TODO: เรียก API เพื่อลบ schedule
+  }, [])
+
+  const fetchScheduleDetail = useCallback(async (scheduleId: number | string) => {
+    try {
+      const accessToken = Cookies.get('accessToken')
+
+      if (!accessToken) return
+
+      const response = await fetch(`/api/schedules/${scheduleId}`, {
+        headers: { Authorization: `Bearer ${accessToken}` }
+      })
+
+      if (response.ok) {
+        const data = await response.json()
+
+        setScheduleDetail(data.data)
+        setOpenDetailDialog(true)
+      }
+    } catch (err) {
+      console.error('❌ Error fetching schedule detail:', err)
+    }
+  }, [])
+
+  const openAssetByAdsItem = useCallback(
+    async (item: AdsItem) => {
+      setOpenAssetDialog(true)
+      setAssetLoading(true)
+      setAssetError(null)
+      setAssetTitle(item.title || 'ไม่มีชื่อ')
+      setAssetSrc(null)
+      setAssetType(null)
+
+      try {
+        // eslint-disable-next-line prefer-const
+        let { media, matchedBy } = resolveMediaForItem(item)
+
+        if (!media) {
           const accessToken = Cookies.get('accessToken')
-          if (accessToken) {
-            const response = await fetch(`/api/schedules/${scheduleId}`, {
-              method: 'GET',
-              headers: {
-                Authorization: `Bearer ${accessToken}`,
-                'Content-Type': 'application/json'
+
+          if (!accessToken) throw new Error('ไม่พบ Access Token')
+
+          const res = await fetch('/api/auth/media', {
+            method: 'GET',
+            headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' }
+          })
+
+          if (!res.ok) throw new Error(`API Error: ${res.status}`)
+          const result = await res.json()
+          const rawList = extractMediaArray(result)
+          const list: MediaItem[] = rawList.map(normalizeMedia)
+
+          // 1) id
+          media = list.find(m => String(m.id) === String(item.id))
+
+          if (!media) {
+            // 2) mediaId/media_id
+            const anyItem = item as any
+            const mid: number | string | undefined = anyItem.mediaId ?? anyItem.media_id
+
+            if (mid != null) media = list.find(m => String(m.id) === String(mid))
+          }
+
+          // 3) title+type(+duration)
+          if (!media) {
+            const itemTitle = normalizeTitle(item.title)
+            const itemType = String(item.type).toLowerCase() === 'video' ? 'video' : 'image'
+            const candidates = list.filter(m => normalizeTitle(m.title) === itemTitle && m.type === itemType)
+
+            if (candidates.length > 0) {
+              if (itemType === 'video' && item.duration != null) {
+                const target = Number(item.duration)
+
+                media = candidates.reduce((best, c) => {
+                  const diff = Math.abs((c.duration ?? target) - target)
+                  const bestDiff = Math.abs((best.duration ?? target) - target)
+
+                  return diff < bestDiff ? c : best
+                }, candidates[0])
+              } else {
+                media = candidates[0]
               }
-            })
-
-            if (response.ok) {
-              const data = await response.json()
-              console.log('📥 Fresh schedule data:', data)
-
-              // ใช้ข้อมูลที่เพิ่งดึงมา
-              const scheduleData = data.data || data
-
-              // ✅ เก็บ adsItems ทั้งหมด
-              const adsItems = scheduleData?.adsItems || []
-              const firstAdsItem = adsItems.length > 0 ? adsItems[0] : null
-
-              console.log('📋 AdsItems:', adsItems)
-              console.log('📋 First AdsItem:', firstAdsItem)
-
-              // เก็บ adsItems ทั้งหมดไว้แสดงใน dialog
-              setSelectedAdsItems(adsItems)
-
-              setSelectedNameAd(firstAdsItem?.title || scheduleData?.title || 'ไม่มีข้อมูลสื่อ')
-              setSelectedDescriptionAd(firstAdsItem?.description || scheduleData?.description || 'ไม่มีรายละเอียดโฆษณา')
-              setSelectedScheduleDetail(scheduleData)
-            } else {
-              console.error('❌ Failed to fetch schedule:', response.status)
-              setSelectedAdsItems([])
-              setSelectedNameAd('ไม่สามารถดึงข้อมูลได้')
-              setSelectedDescriptionAd('ไม่สามารถดึงข้อมูลได้')
             }
           }
-        } catch (error) {
-          console.error('❌ Error fetching schedule:', error)
-          setSelectedAdsItems([])
-          setSelectedNameAd('เกิดข้อผิดพลาด')
-          setSelectedDescriptionAd('เกิดข้อผิดพลาด')
+
+          console.log('[openAssetByAdsItem] matched fallback:', matchedBy, media?.id)
         }
-      } else {
-        // ใช้ข้อมูลจาก scheduleList
-        console.log('✅ Using schedule from list')
 
-        // ✅ เก็บ adsItems ทั้งหมด
-        const adsItems = schedule?.adsItems || []
-        const firstAdsItem = adsItems.length > 0 ? adsItems[0] : null
+        if (!media) throw new Error('ไม่พบไฟล์สื่อที่ตรงกับรายการนี้')
+        if (!media.fileUrl) throw new Error('ไฟล์ไม่มี URL')
 
-        console.log('📋 AdsItems from list:', adsItems)
-        console.log('📋 First AdsItem from list:', firstAdsItem)
+        const fullFileUrl = toAbs(media.fileUrl)
 
-        // เก็บ adsItems ทั้งหมดไว้แสดงใน dialog
-        setSelectedAdsItems(adsItems)
-
-        let adTitle = firstAdsItem?.title || schedule?.title || schedule?.name || 'ไม่มีข้อมูลสื่อ'
-        let adDescription = firstAdsItem?.description || schedule?.description || 'ไม่มีรายละเอียดโฆษณา'
-
-        console.log('📋 Ad Title:', adTitle)
-        console.log('📋 Ad Description:', adDescription)
-
-        setSelectedNameAd(adTitle)
-        setSelectedDescriptionAd(adDescription)
-        setSelectedScheduleDetail(schedule)
+        setAssetSrc(fullFileUrl)
+        setAssetType(media.type as 'image' | 'video')
+      } catch (err: any) {
+        console.error('[openAssetByAdsItem] error:', err)
+        setAssetError(err?.message || 'ไม่สามารถโหลดสื่อได้')
+      } finally {
+        setAssetLoading(false)
       }
-
-      setOpenDialog(true)
-    }
-  }
-  const EnhancedDialog = () => (
-    <Dialog open={openDialog} onClose={() => setOpenDialog(false)} maxWidth='lg' fullWidth>
-      <DialogTitle
-        sx={{
-          background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-          color: 'white',
-          textAlign: 'center',
-          fontWeight: 'bold'
-        }}
-      >
-        🎬 รายละเอียดอุปกรณ์และกำหนดการ
-      </DialogTitle>
-      <DialogContent sx={{ p: 3 }}>
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-          {/* รายละเอียดอุปกรณ์ */}
-          <Box
-            sx={{
-              p: 3,
-              borderRadius: 2,
-              background: 'linear-gradient(135deg, #e3f2fd 0%, #f3e5f5 100%)',
-              border: '2px solid #2196f3'
-            }}
-          >
-            <Typography variant='h6' sx={{ color: 'primary.main', mb: 2, fontWeight: 'bold' }}>
-              📱 รายละเอียดอุปกรณ์
-            </Typography>
-            <Typography variant='body1' sx={{ fontSize: '1.1rem' }}>
-              {selectedDescription || 'ไม่มีข้อมูลอุปกรณ์'}
-            </Typography>
-          </Box>
-          <Box
-            sx={{
-              p: 3,
-              borderRadius: 2,
-              background: 'linear-gradient(135deg, #f3e5f5 0%, #e8f5e8 100%)',
-              border: '2px solid #4caf50'
-            }}
-          >
-            <Typography variant='h6' sx={{ color: 'success.main', mb: 2, fontWeight: 'bold' }}>
-              📅 ชื่อกำหนดการ
-            </Typography>
-            <Typography variant='body1' sx={{ fontSize: '1.1rem' }}>
-              {selectedScheduleName || 'ไม่มีตารางวันนี้'}
-            </Typography>
-          </Box>
-
-          {/* AdsItems Section */}
-          {selectedAdsItems.length > 0 && (
-            <Box
-              sx={{
-                p: 3,
-                borderRadius: 2,
-                background: 'linear-gradient(135deg, #fff3e0 0%, #fce4ec 100%)',
-                border: '2px solid #ff9800'
-              }}
-            >
-              <Typography
-                variant='h6'
-                sx={{
-                  color: 'warning.main',
-                  mb: 3,
-                  fontWeight: 'bold',
-                  textAlign: 'center'
-                }}
-              >
-                🎬 รายการโฆษณาทั้งหมด ({selectedAdsItems.length} รายการ)
-              </Typography>
-
-              <Grid container spacing={3}>
-                {selectedAdsItems.map((adsItem, index) => (
-                  <Grid size={{ xs: 12, md: selectedAdsItems.length === 1 ? 12 : 6 }} key={index}>
-                    <Box
-                      sx={{
-                        p: 3,
-                        borderRadius: 2,
-                        background: 'white',
-                        boxShadow: '0 4px 20px rgba(0,0,0,0.1)',
-                        border: '1px solid #e0e0e0',
-                        transition: 'all 0.3s ease',
-                        '&:hover': {
-                          transform: 'translateY(-2px)',
-                          boxShadow: '0 8px 30px rgba(0,0,0,0.15)'
-                        }
-                      }}
-                    >
-                      {/* หมายเลขโฆษณา */}
-                      <Box
-                        sx={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          mb: 2,
-                          pb: 1,
-                          borderBottom: '2px solid #f0f0f0'
-                        }}
-                      >
-                        <Chip
-                          label={`โฆษณาที่ ${index + 1}`}
-                          color='primary'
-                          variant='filled'
-                          sx={{ fontWeight: 'bold' }}
-                        />
-                      </Box>
-
-                      {/* ชื่อโฆษณา */}
-                      <Box sx={{ mb: 2 }}>
-                        <Typography
-                          variant='subtitle1'
-                          sx={{
-                            color: 'error.main',
-                            fontWeight: 'bold',
-                            mb: 1,
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 1
-                          }}
-                        >
-                          🎭 ชื่อโฆษณา
-                        </Typography>
-                        <Typography
-                          variant='body1'
-                          sx={{
-                            p: 2,
-                            backgroundColor: '#ffebee',
-                            borderRadius: 1,
-                            border: '1px solid #ffcdd2',
-                            fontSize: '1rem',
-                            fontWeight: 500
-                          }}
-                        >
-                          {adsItem.title || 'ไม่มีชื่อโฆษณา'}
-                        </Typography>
-                      </Box>
-
-                      {/* รายละเอียดโฆษณา */}
-                      <Box>
-                        <Typography
-                          variant='subtitle1'
-                          sx={{
-                            color: 'error.main',
-                            fontWeight: 'bold',
-                            mb: 1,
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 1
-                          }}
-                        >
-                          📝 รายละเอียด
-                        </Typography>
-                        <Typography
-                          variant='body1'
-                          sx={{
-                            p: 2,
-                            backgroundColor: '#ffebee',
-                            borderRadius: 1,
-                            border: '1px solid #ffcdd2',
-                            minHeight: '60px',
-                            fontSize: '0.95rem',
-                            lineHeight: 1.6
-                          }}
-                        >
-                          {adsItem.description || 'ไม่มีรายละเอียด'}
-                        </Typography>
-                      </Box>
-
-                      {/* เพิ่มข้อมูลเสริมถ้ามี */}
-                      {(adsItem.duration || adsItem.fileSize || adsItem.type) && (
-                        <Box sx={{ mt: 2, pt: 2, borderTop: '1px solid #f0f0f0' }}>
-                          <Typography
-                            variant='caption'
-                            sx={{
-                              color: 'text.secondary',
-                              display: 'flex',
-                              flexWrap: 'wrap',
-                              gap: 2
-                            }}
-                          >
-                            {adsItem.duration && <span>⏱️ ระยะเวลา: {adsItem.duration}s</span>}
-                            {adsItem.fileSize && (
-                              <span>💾 ขนาดไฟล์: {(adsItem.fileSize / 1024 / 1024).toFixed(2)} MB</span>
-                            )}
-                            {adsItem.type && <span>📁 ประเภท: {adsItem.type}</span>}
-                          </Typography>
-                        </Box>
-                      )}
-                    </Box>
-                  </Grid>
-                ))}
-              </Grid>
-            </Box>
-          )}
-
-          {/* ถ้าไม่มี adsItems แสดงข้อมูลแบบเดิม */}
-          {selectedAdsItems.length === 0 && (
-            <>
-              <Box
-                sx={{
-                  p: 3,
-                  borderRadius: 2,
-                  background: 'linear-gradient(135deg, #ffebee 0%, #fff3e0 100%)',
-                  border: '2px solid #f44336'
-                }}
-              >
-                <Typography variant='h6' sx={{ color: 'error.main', mb: 2, fontWeight: 'bold' }}>
-                  🎬 ชื่อโฆษณา
-                </Typography>
-                <Typography variant='body1' sx={{ fontSize: '1.1rem' }}>
-                  {selectedNameAd || 'ไม่มีข้อมูลสื่อ'}
-                </Typography>
-              </Box>
-
-              <Box
-                sx={{
-                  p: 3,
-                  borderRadius: 2,
-                  background: 'linear-gradient(135deg, #ffebee 0%, #fff3e0 100%)',
-                  border: '2px solid #f44336'
-                }}
-              >
-                <Typography variant='h6' sx={{ color: 'error.main', mb: 2, fontWeight: 'bold' }}>
-                  📝 รายละเอียดโฆษณา
-                </Typography>
-                <Typography
-                  variant='body1'
-                  sx={{
-                    minHeight: '60px',
-                    fontSize: '1rem',
-                    lineHeight: 1.6
-                  }}
-                >
-                  {selectedDescriptionAd || 'ไม่มีรายละเอียดโฆษณา'}
-                </Typography>
-              </Box>
-            </>
-          )}
-        </Box>
-      </DialogContent>
-    </Dialog>
+    },
+    [resolveMediaForItem]
   )
-  const handleBoxClickAlternative = (device: any) => {
-    if (device.schedules_today) {
-      const scheduleId = device.schedules_today.scheduleId
-      const schedule = scheduleList.find((s: any) => s.id === scheduleId)
 
-      // รายละเอียดอุปกรณ์
-      setSelectedDescription(device.description || 'ไม่ทราบชื่อ')
-
-      // ชื่อกำหนดการ - เอามาจาก scheduleName
-      setSelectedScheduleName(device.schedules_today.scheduleName || 'ไม่มีตารางวันนี้')
-
-      // ชื่อโฆษณาและรายละเอียด - เอาจากข้อมูล schedule ที่ได้จาก API /schedules/{id}
-      setSelectedNameAd(schedule?.title || 'ไม่มีข้อมูลสื่อ')
-      setSelectedDescriptionAd(schedule?.description || 'ไม่มีรายละเอียดโฆษณา')
-
-      setSelectedScheduleDetail(schedule || null)
-      setOpenDialog(true)
-    }
-  }
-
-  const [selectedDescriptionAd, setSelectedDescriptionAd] = useState<string | null>(null)
-
-  const truncateText = (text: string, maxLength: number) => {
-    if (!text) return 'ไม่ทราบชื่อ'
-    return text.length > maxLength ? text.slice(0, maxLength) + '...' : text
-  }
-
-  const handleToggleDevice = (deviceId: string) => {
-    setSelectedDeviceIds(
-      prev =>
-        prev.includes(deviceId)
-          ? prev.filter(id => id !== deviceId) // ถ้าเลือกแล้ว → เอาออก
-          : [...prev, deviceId] // ถ้ายังไม่เลือก → เพิ่มเข้า
+  if (!mounted) {
+    return (
+      <Card>
+        <CardContent>
+          <Typography>Loading…</Typography>
+        </CardContent>
+      </Card>
     )
   }
 
+  // -------------------- Render --------------------
   return (
     <Grid container spacing={6}>
       <Grid size={{ xs: 12, md: 12 }}>
         <div className='flex gap-4 flex-col'>
           <Typography variant='h4' component='h2' sx={{ color: 'text.primary', mb: 2 }}>
-            อุปกรณ์ที่ไม่ได้อยู่ในกลุ่ม
+            อุปกรณ์ที่ใช้/สูงสุด {deviceUsed} / {maxDeviceUsed}
           </Typography>
 
           <CardContent>
-            <Grid container spacing={2}>
-              {deviceInfo.length > 0 ? (
-                deviceInfo.map((device, index) => (
-                  <Grid size={{ xs: 3 }} key={device.device_id || index}>
-                    <Box
-                      onClick={() => handleBoxClick(device)}
-                      sx={{
-                        display: 'flex',
-                        flexDirection: 'column',
-                        justifyContent: 'center',
-                        alignItems: 'center',
-                        padding: 2,
-                        mx: 5,
-                        cursor: device.schedules_today ? 'pointer' : 'default',
-                        '&:hover': {
-                          backgroundColor: device.schedules_today ? '#fef2f2' : 'inherit'
-                        }
-                      }}
-                    >
-                      <div onClick={e => e.stopPropagation()}>
-                        <FormControlLabel
-                          className='ms-5'
-                          label=''
-                          control={
-                            <Checkbox
-                              color='success'
-                              checked={selectedDeviceIds.includes(device.device_id)}
-                              onChange={() => handleToggleDevice(device.device_id)}
-                            />
-                          }
-                        />
-                      </div>
+            <DeviceGrid
+              deviceInfo={deviceInfoView}
+              selectedDeviceIds={selectedDeviceIds}
+              onToggleDevice={handleToggleDevice}
+              onOpenDevice={handleOpenDevice}
+            />
 
-                      <img
-                        src={device.schedules_today ? '/images/tv/Vector_red.svg' : '/images/tv/Vector.svg'}
-                        height='100'
-                        width='100'
-                      />
-                      <p>{device.device_id}</p>
-                      <p>{device.name || 'ไม่ทราบชื่อ'}</p>
-                      <p>{truncateText(device.description, 20)}</p>
-                    </Box>
-                  </Grid>
-                ))
-              ) : (
-                <p>กำลังโหลดข้อมูล...</p>
-              )}
-            </Grid>
+            {/* Dialog 1: อุปกรณ์ */}
+            <DeviceDialog
+              open={openDialog}
+              onClose={() => setOpenDialog(false)}
+              selectedDevice={selectedDevice}
+              selectedDescription={selectedDescription}
+              onOpenSchedule={id => fetchScheduleDetail(id)}
+              onDeleteSchedule={(id, type) => handleRemoveSchedule(id, type)}
+              onDeviceUpdated={handleDeviceUpdated}
+            />
 
-            {/* ✅ Enhanced Dialog Component */}
-            <Dialog open={openDialog} onClose={() => setOpenDialog(false)} maxWidth='md' fullWidth>
-              <DialogTitle>รายละเอียดอุปกรณ์และกำหนดการ</DialogTitle>
-              <DialogContent>
-                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3, pt: 1 }}>
-                  {/* รายละเอียดอุปกรณ์ */}
-                  <Box>
-                    <Typography variant='h6' sx={{ color: 'primary.main', mb: 1 }}>
-                      📱 รายละเอียดอุปกรณ์
-                    </Typography>
-                    <Typography
-                      variant='body1'
-                      sx={{
-                        p: 2,
-                        backgroundColor: 'grey.50',
-                        borderRadius: 1,
-                        border: '1px solid',
-                        borderColor: 'grey.300'
-                      }}
-                    >
-                      {selectedDescription || 'ไม่มีข้อมูลอุปกรณ์'}
-                    </Typography>
-                  </Box>
+            {/* Dialog 2: รายละเอียดกำหนดการ */}
+            <ScheduleDetailDialog
+              open={openDetailDialog}
+              onClose={() => setOpenDetailDialog(false)}
+              scheduleDetail={scheduleDetail}
+              onOpenAsset={openAssetByAdsItem}
+            />
 
-                  {/* ชื่อกำหนดการ */}
-                  <Box>
-                    <Typography variant='h6' sx={{ color: 'primary.main', mb: 1 }}>
-                      📅 ชื่อกำหนดการ
-                    </Typography>
-                    <Typography
-                      variant='body1'
-                      sx={{
-                        p: 2,
-                        backgroundColor: 'grey.50',
-                        borderRadius: 1,
-                        border: '1px solid',
-                        borderColor: 'grey.300'
-                      }}
-                    >
-                      {selectedScheduleName || 'ไม่มีตารางวันนี้'}
-                    </Typography>
-                  </Box>
-
-                  {/* รายการโฆษณา */}
-                  {selectedAdsItems.length > 0 ? (
-                    <Box>
-                      <Typography variant='h6' sx={{ color: 'error.main', mb: 2 }}>
-                        🎬 รายการโฆษณา ({selectedAdsItems.length} รายการ)
-                      </Typography>
-                      {selectedAdsItems.map((adsItem, index) => (
-                        <Box key={index} sx={{ mb: 3, p: 2, backgroundColor: 'grey.50', borderRadius: 1 }}>
-                          <Typography variant='subtitle1' sx={{ fontWeight: 'bold', mb: 1, color: 'error.main' }}>
-                            โฆษณาที่ {index + 1}
-                          </Typography>
-
-                          <Box sx={{ mb: 2 }}>
-                            <Typography variant='body2' sx={{ fontWeight: 'bold', mb: 0.5 }}>
-                              ชื่อ:
-                            </Typography>
-                            <Typography variant='body1'>{adsItem.title || 'ไม่มีชื่อ'}</Typography>
-                          </Box>
-
-                          <Box>
-                            <Typography variant='body2' sx={{ fontWeight: 'bold', mb: 0.5 }}>
-                              รายละเอียด:
-                            </Typography>
-                            <Typography variant='body1'>{adsItem.description || 'ไม่มีรายละเอียด'}</Typography>
-                          </Box>
-
-                          {/* ข้อมูลเพิ่มเติม */}
-                          {(adsItem.duration || adsItem.fileSize || adsItem.type) && (
-                            <Box sx={{ mt: 1, pt: 1, borderTop: '1px solid #ddd' }}>
-                              <Typography variant='caption' sx={{ color: 'text.secondary' }}>
-                                {adsItem.duration && `ระยะเวลา: ${adsItem.duration}s `}
-                                {adsItem.fileSize && `| ขนาด: ${(adsItem.fileSize / 1024 / 1024).toFixed(1)}MB `}
-                                {adsItem.type && `| ประเภท: ${adsItem.type}`}
-                              </Typography>
-                            </Box>
-                          )}
-                        </Box>
-                      ))}
-                    </Box>
-                  ) : (
-                    // แสดงข้อมูลแบบเดิมถ้าไม่มี adsItems
-                    <>
-                      <Box>
-                        <Typography variant='h6' sx={{ color: 'error.main', mb: 1 }}>
-                          🎬 ชื่อโฆษณา
-                        </Typography>
-                        <Typography
-                          variant='body1'
-                          sx={{
-                            p: 2,
-                            backgroundColor: 'error.50',
-                            borderRadius: 1,
-                            border: '1px solid',
-                            borderColor: 'error.300'
-                          }}
-                        >
-                          {selectedNameAd || 'ไม่มีข้อมูลสื่อ'}
-                        </Typography>
-                      </Box>
-
-                      <Box>
-                        <Typography variant='h6' sx={{ color: 'error.main', mb: 1 }}>
-                          📝 รายละเอียดโฆษณา
-                        </Typography>
-                        <Typography
-                          variant='body1'
-                          sx={{
-                            p: 2,
-                            backgroundColor: 'error.50',
-                            borderRadius: 1,
-                            border: '1px solid',
-                            borderColor: 'error.300',
-                            minHeight: '60px'
-                          }}
-                        >
-                          {selectedDescriptionAd || 'ไม่มีรายละเอียดโฆษณา'}
-                        </Typography>
-                      </Box>
-                    </>
-                  )}
-                </Box>
-              </DialogContent>
-            </Dialog>
+            {/* Dialog 3: ตัวอย่างสื่อ */}
+            <AssetPreviewDialog
+              open={openAssetDialog}
+              onClose={() => setOpenAssetDialog(false)}
+              loading={assetLoading}
+              error={assetError}
+              title={assetTitle}
+              src={assetSrc}
+              type={assetType}
+            />
           </CardContent>
 
           {error && (
@@ -695,7 +1254,7 @@ const StepPersonalDetails = ({
                 timeIntervals={15}
                 selected={startDateTime}
                 id='start-date-time-picker'
-                dateFormat='MM/dd/yyyy h:mm aa'
+                dateFormat='dd/MM/yyyy h:mm aa'
                 onChange={(date: Date | null) => setStartDateTime(date)}
                 customInput={<CustomTextField label='วันที่เริ่มต้น' fullWidth color='error' />}
               />
@@ -707,7 +1266,7 @@ const StepPersonalDetails = ({
                 timeIntervals={15}
                 selected={endDateTime}
                 id='end-date-time-picker'
-                dateFormat='MM/dd/yyyy h:mm aa'
+                dateFormat='dd/MM/yyyy h:mm aa'
                 onChange={(date: Date | null) => setEndDateTime(date)}
                 customInput={<CustomTextField label='วันที่สิ้นสุด' fullWidth color='error' />}
               />
@@ -715,7 +1274,7 @@ const StepPersonalDetails = ({
           </Grid>
 
           <Alert variant='outlined' severity='error'>
-            "กรุณาเลือกวิธีการเลือกอุปกรณ์","กรุณาระบุช่วงเวลาเริ่มต้นและสิ้นสุด","วันสิ้นสุดต้องไม่น้อยกว่าวันเริ่มต้น"
+            &quot;กรุณาเลือกวิธีการเลือกอุปกรณ์&quot;,&quot;กรุณาระบุช่วงเวลาเริ่มต้นและสิ้นสุด&quot;,&quot;วันสิ้นสุดต้องไม่น้อยกว่าวันเริ่มต้น&quot;
           </Alert>
         </div>
       </Grid>

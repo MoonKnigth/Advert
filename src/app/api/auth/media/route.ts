@@ -1,5 +1,6 @@
 // src/app/api/auth/media/route.ts
-import { NextRequest, NextResponse } from 'next/server'
+import type { NextRequest } from 'next/server';
+import { NextResponse } from 'next/server'
 
 export async function GET(req: NextRequest) {
     const token = req.cookies.get('accessToken')?.value
@@ -20,6 +21,8 @@ export async function GET(req: NextRequest) {
         }
 
         const data = await apiRes.json()
+
+
         return NextResponse.json({ success: true, data })
     } catch (error) {
         return NextResponse.json({ success: false, error: 'Fetch error' }, { status: 500 })

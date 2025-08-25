@@ -23,14 +23,17 @@ export async function POST(req: Request) {
 
 
         const text = await res.text()
+
         console.log('[Proxy Upload Response Raw]:', text)
         let result
+
         try {
             result = JSON.parse(text)
             console.log('[Proxy Upload Parsed JSON]:', result)
         } catch (jsonError) {
             // ไม่ใช่ json
             console.error('[❌ ไม่ใช่ JSON]', text)
+
             return NextResponse.json(
                 {
                     success: false,
@@ -40,10 +43,13 @@ export async function POST(req: Request) {
                 { status: 502 }
             )
         }
+
+
         return NextResponse.json(result, { status: res.status })
 
     } catch (err: any) {
         console.error('[❌ Upload Proxy Error]', err?.message || err)
+
         return NextResponse.json(
             { success: false, message: err?.message || 'Upload proxy failed' },
             { status: 500 }

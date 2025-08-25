@@ -1,6 +1,8 @@
 'use client'
 import { useState } from 'react'
-import { useParams, useRouter } from 'next/navigation'
+
+import { useRouter } from 'next/navigation'
+
 import Cookies from 'js-cookie'
 import {
   Button,
@@ -10,10 +12,9 @@ import {
   Checkbox,
   Divider,
   IconButton,
-  InputAdornment,
-  Grid
+  InputAdornment
 } from '@mui/material'
-import { styled, useTheme } from '@mui/material/styles'
+import { styled } from '@mui/material/styles'
 import classnames from 'classnames'
 import Alert from '@mui/material/Alert'
 import Slide from '@mui/material/Slide'
@@ -41,8 +42,6 @@ const Login = () => {
   const [isPasswordShown, setIsPasswordShown] = useState(false)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [device_type, setDevice_type] = useState('web')
-  const [error, setError] = useState('')
 
   const [showTextAlert, setShowTextAlert] = useState('')
   const [severity, setSeverity] = useState<'success' | 'error'>()
@@ -64,6 +63,7 @@ const Login = () => {
       // ป้องกันกรณี response ไม่ใช่ JSON
       const text = await response.text()
       let data: any
+
       try {
         data = JSON.parse(text)
       } catch (e) {
@@ -88,6 +88,7 @@ const Login = () => {
 
         const scheduleAssignmentsText = await scheduleAssignmentsRes.text()
         let scheduleAssignmentsData: any
+
         try {
           scheduleAssignmentsData = JSON.parse(scheduleAssignmentsText)
         } catch (e) {
@@ -98,6 +99,7 @@ const Login = () => {
           console.warn('Schedule assignments API warning:', scheduleAssignmentsData?.message)
         } else {
           console.log('Schedule Assignments Data:', scheduleAssignmentsData.data)
+
           // 👉 ถ้าต้องการเก็บข้อมูลจาก API:
           localStorage.setItem('scheduleAssignmentsData', JSON.stringify(scheduleAssignmentsData.data))
         }
@@ -117,7 +119,7 @@ const Login = () => {
         setTimeout(() => {
           router.push('/dashboard')
           setShowAlert(false)
-        }, 3000)
+        }, 2000)
       } else {
         throw new Error(data?.message || 'Login failed')
       }
@@ -143,14 +145,22 @@ const Login = () => {
             <Typography variant='h4'>{`Welcome to ${themeConfig.templateName}! 👋🏻`}</Typography>
             <Typography>Please sign-in to your account and start the adventure</Typography>
           </div>
-          <form onSubmit={handleLogin} className='flex flex-col gap-5'>
+          <form onSubmit={handleLogin} className='flex flex-col gap-5' autoComplete='on'>
             <TextField
               fullWidth
               label='Email or Username'
               value={email}
               onChange={e => setEmail(e.target.value)}
-              placeholder='Enter your email or username'
+              placeholder={email ? '' : 'Enter your email or username'}
               required
+              autoComplete='username'
+              name='email'
+              id='email-field'
+              slotProps={{
+                inputLabel: {
+                  shrink: true
+                }
+              }}
             />
             <TextField
               fullWidth
@@ -158,8 +168,16 @@ const Login = () => {
               value={password}
               onChange={e => setPassword(e.target.value)}
               type={isPasswordShown ? 'text' : 'password'}
-              placeholder='············'
+              placeholder={password ? '' : '············'}
               required
+              autoComplete='current-password'
+              name='password'
+              id='password-field'
+              slotProps={{
+                inputLabel: {
+                  shrink: true
+                }
+              }}
               InputProps={{
                 endAdornment: (
                   <InputAdornment position='end'>
@@ -170,7 +188,6 @@ const Login = () => {
                 )
               }}
             />
-            {/* {error && <Typography color='error'>{error}</Typography>} */}
             <div className='flex justify-between items-center'>
               <FormControlLabel control={<Checkbox />} label='Remember me' />
               <Typography className='text-end' href={'/forgot_password'} color='primary.main' component={Link}>

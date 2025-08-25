@@ -1,5 +1,6 @@
 // app/api/auth/device/route.ts
 import { NextResponse } from 'next/server'
+
 import axios from 'axios'
 
 export async function POST(request: Request) {

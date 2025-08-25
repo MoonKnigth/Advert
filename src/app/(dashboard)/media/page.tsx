@@ -1,6 +1,9 @@
 'use client'
 
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useMemo, useState, startTransition } from 'react'
+
+import type { SyntheticEvent } from 'react'
+
 import {
   Card,
   CardContent,
@@ -21,28 +24,42 @@ import {
   Paper,
   Stack,
   CardHeader,
-  CardActions
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  TextField,
+  DialogActions,
+  Snackbar
 } from '@mui/material'
+
+// MUI extras
+import Tooltip from '@mui/material/Tooltip'
+import Menu from '@mui/material/Menu'
+import MenuItem from '@mui/material/MenuItem'
+import ListItemIcon from '@mui/material/ListItemIcon'
+import ListItemText from '@mui/material/ListItemText'
+
+// Icons
 import {
-  Close as CloseIcon,
   PlayArrow as PlayIcon,
   VideoLibrary as VideoIcon,
   Image as ImageIcon,
   Delete as DeleteIcon,
   SelectAll as SelectAllIcon,
-  MoreVert as MoreVertIcon,
   Download as DownloadIcon,
-  Fullscreen as FullscreenIcon,
   AccessTime as TimeIcon,
-  Storage as StorageIcon
+  Storage as StorageIcon,
+  Edit as EditIcon
 } from '@mui/icons-material'
-import type { SyntheticEvent } from 'react'
+
 import Cookies from 'js-cookie'
 import TabContext from '@mui/lab/TabContext'
 import TabList from '@mui/lab/TabList'
-import TabPanel from '@mui/lab/TabPanel'
 import { useTheme } from '@mui/material/styles'
 import useMediaQuery from '@mui/material/useMediaQuery'
+
+import DialogCloseButton from '@/components/dialogs/DialogCloseButton'
+import CustomTextField from '@/@core/components/mui/TextField'
 
 type MediaItem = {
   id: number
@@ -54,6 +71,7 @@ type MediaItem = {
   fileSize: number | null
   status: number | null
   aspectRatio: string | null
+  description: string | null
 }
 
 export default function MediaPage() {
@@ -68,9 +86,27 @@ export default function MediaPage() {
   const [selected, setSelected] = useState<number[]>([])
   const [deleting, setDeleting] = useState(false)
 
-  // Modal states
+  // Preview Modal
   const [modalOpen, setModalOpen] = useState(false)
   const [currentMedia, setCurrentMedia] = useState<MediaItem | null>(null)
+
+  // Edit Dialog
+  const [editOpen, setEditOpen] = useState(false)
+  const [editMedia, setEditMedia] = useState<MediaItem | null>(null)
+  const [editTitle, setEditTitle] = useState('')
+  const [editDescription, setEditDescription] = useState('')
+  const [isSaving, setIsSaving] = useState(false)
+
+  // Actions menu (เผื่อใช้ภายหลัง)
+  const [actionAnchor, setActionAnchor] = useState<HTMLElement | null>(null)
+  const [actionItem, setActionItem] = useState<MediaItem | null>(null)
+
+  // Toast
+  const [toast, setToast] = useState<{ open: boolean; msg: string; sev: 'success' | 'error' }>({
+    open: false,
+    msg: '',
+    sev: 'success'
+  })
 
   const handleChange = (event: SyntheticEvent, newValue: string) => {
     setValue(newValue)
@@ -78,9 +114,7 @@ export default function MediaPage() {
   }
 
   const handleSelect = (id: number, event?: React.MouseEvent) => {
-    if (event) {
-      event.stopPropagation()
-    }
+    event?.stopPropagation()
     setSelected(prev => (prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id]))
   }
 
@@ -94,10 +128,13 @@ export default function MediaPage() {
 
   const handleDelete = async () => {
     setDeleting(true)
+
     try {
       const accessToken = Cookies.get('accessToken')
+
       if (!accessToken) {
         setError('No access token found')
+
         return
       }
 
@@ -111,8 +148,7 @@ export default function MediaPage() {
       })
 
       if (res.ok) {
-        const remaining = media.filter(item => !selected.includes(item.id))
-        setMedia(remaining)
+        setMedia(prev => prev.filter(item => !selected.includes(item.id)))
         setSelected([])
       } else {
         setError('Failed to delete media items')
@@ -127,10 +163,8 @@ export default function MediaPage() {
 
   const handleMediaClick = (item: MediaItem, event: React.MouseEvent) => {
     const target = event.target as HTMLElement
-    if (target.closest('.MuiCheckbox-root')) {
-      return
-    }
 
+    if (target.closest('.MuiCheckbox-root')) return
     setCurrentMedia(item)
     setModalOpen(true)
   }
@@ -143,8 +177,10 @@ export default function MediaPage() {
   const formatFileSize = (bytes: number | null) => {
     if (!bytes) return 'N/A'
     const sizes = ['Bytes', 'KB', 'MB', 'GB']
+
     if (bytes === 0) return '0 Byte'
     const i = parseInt(Math.floor(Math.log(bytes) / Math.log(1024)).toString())
+
     return Math.round((bytes / Math.pow(1024, i)) * 100) / 100 + ' ' + sizes[i]
   }
 
@@ -152,6 +188,7 @@ export default function MediaPage() {
     if (!seconds) return null
     const mins = Math.floor(seconds / 60)
     const secs = seconds % 60
+
     return `${mins}:${secs.toString().padStart(2, '0')}`
   }
 
@@ -163,6 +200,7 @@ export default function MediaPage() {
         if (!accessToken) {
           setError('No access token found')
           setLoading(false)
+
           return
         }
 
@@ -175,12 +213,14 @@ export default function MediaPage() {
 
         const rawText = await res.clone().text()
         let data
+
         try {
           data = JSON.parse(rawText)
         } catch (err) {
           console.error('Invalid JSON:', err)
           setError('Invalid JSON response')
           setLoading(false)
+
           return
         }
 
@@ -200,6 +240,138 @@ export default function MediaPage() {
 
     fetchMedia()
   }, [])
+
+  // ✅ memo ช่วยลดงานกรองทุกครั้งที่ re-render
+  const filteredMedia = useMemo(
+    () => media.filter(item => item.status === 1 && (value === '1' ? item.type === 'video' : item.type === 'image')),
+    [media, value]
+  )
+
+  useEffect(() => {
+    if (editOpen && editMedia) {
+      setEditTitle(editMedia.title ?? '')
+      setEditDescription(editMedia.description ?? '')
+    }
+
+    // ปิด dialog แล้วไม่ต้องไปแตะค่าอีก
+  }, [editOpen, editMedia])
+
+  const handleEditClick = (item: MediaItem) => {
+    setEditMedia(item)
+    setEditOpen(true)
+  }
+
+  const handleEditClose = () => {
+    setEditOpen(false)
+    setEditMedia(null)
+  }
+
+  // ✅ optimistic + partial payload + timeout + rollback
+  const handleEditSave = async () => {
+    if (!editMedia) return
+
+    // partial payload เฉพาะ field ที่เปลี่ยน
+    const payload: Partial<Pick<MediaItem, 'title' | 'description'>> = {}
+
+    if (editTitle !== (editMedia.title ?? '')) payload.title = editTitle
+    if (editDescription !== (editMedia.description ?? '')) payload.description = editDescription
+
+    if (!Object.keys(payload).length) {
+      setEditOpen(false)
+
+      return
+    }
+
+    const accessToken = Cookies.get('accessToken')
+
+    // optimistic update ทันที + ปิด dialog
+    const previous = media
+
+    startTransition(() => {
+      setMedia(prev => prev.map(m => (m.id === editMedia.id ? { ...m, ...payload } : m)))
+    })
+    setEditOpen(false)
+
+    // network with timeout
+    const controller = new AbortController()
+    const t = setTimeout(() => controller.abort(), 8000)
+
+    try {
+      setIsSaving(true)
+
+      const res = await fetch(`/api/auth/media/${editMedia.id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {})
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal
+      })
+
+      clearTimeout(t)
+
+      const json = await res.json().catch(() => ({}))
+
+      if (!res.ok || json?.success === false) throw new Error(json?.message || 'Update failed')
+
+      setToast({ open: true, msg: 'Updated successfully', sev: 'success' })
+    } catch (e: any) {
+      clearTimeout(t)
+
+      // rollback
+      startTransition(() => setMedia(previous))
+      setToast({ open: true, msg: e?.message || 'Update failed', sev: 'error' })
+      setError(e?.message || 'Network error occurred while updating media')
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  // actions menu helpers (ยังไม่ได้ใช้ใน UI — เผื่ออนาคต)
+
+  const handleCloseActions = () => {
+    setActionAnchor(null)
+    setActionItem(null)
+  }
+
+  const handleEditFromMenu = () => {
+    if (!actionItem) return
+    handleEditClick(actionItem)
+    handleCloseActions()
+  }
+
+  const handleDeleteSingle = async (id: number) => {
+    setDeleting(true)
+
+    try {
+      const accessToken = Cookies.get('accessToken')
+
+      if (!accessToken) {
+        setError('No access token found')
+
+        return
+      }
+
+      const res = await fetch('/api/auth/media/delete', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: [id] })
+      })
+
+      if (res.ok) setMedia(prev => prev.filter(m => m.id !== id))
+      else setError('Failed to delete media item')
+    } catch (err) {
+      console.error(err)
+      setError('Error occurred while deleting')
+    } finally {
+      setDeleting(false)
+      handleCloseActions()
+    }
+  }
+
+  const isUnchanged =
+    !!editMedia && editTitle === (editMedia.title || '') && editDescription === (editMedia.description || '')
 
   if (loading) {
     return (
@@ -226,10 +398,6 @@ export default function MediaPage() {
     )
   }
 
-  const filteredMedia = media.filter(
-    item => item.status === 1 && (value === '1' ? item.type === 'video' : item.type === 'image')
-  )
-
   return (
     <>
       <Typography variant='h4' sx={{ pb: 5, pl: 2, fontWeight: 600, color: 'text.primary' }}>
@@ -237,7 +405,7 @@ export default function MediaPage() {
       </Typography>
 
       <Box sx={{ p: 0 }}>
-        {/* Navigation Tabs */}
+        {/* Tabs */}
         <Card sx={{ mb: 0 }}>
           <TabContext value={value}>
             <Box sx={{ borderBottom: 1, borderColor: 'divider', mt: 2 }}>
@@ -321,8 +489,9 @@ export default function MediaPage() {
                 </Box>
               </Stack>
             </CardContent>
+
+            {/* Grid */}
             <CardContent>
-              {/* Media Grid */}
               {filteredMedia.length === 0 ? (
                 <Paper sx={{ p: 8, textAlign: 'center', bgcolor: 'grey.50' }}>
                   <Avatar sx={{ mx: 'auto', mb: 3, bgcolor: 'grey.200', width: 64, height: 64 }}>
@@ -347,52 +516,67 @@ export default function MediaPage() {
                           cursor: 'pointer',
                           border: selected.includes(item.id) ? 2 : 1,
                           borderColor: selected.includes(item.id) ? 'primary.main' : 'divider',
-                          '&:hover': {
-                            transform: 'translateY(-4px)',
-                            boxShadow: 6
-                          }
+                          '&:hover': { transform: 'translateY(-4px)', boxShadow: 6 }
                         }}
                       >
-                        {/* Selection Checkbox */}
-                        <Checkbox
-                          checked={selected.includes(item.id)}
-                          onChange={e => handleSelect(item.id)}
-                          onClick={e => e.stopPropagation()}
-                          sx={{
-                            position: 'absolute',
-                            top: 8,
-                            right: 8,
-                            zIndex: 2,
-                            bgcolor: 'background.paper',
-                            borderRadius: 1,
-                            boxShadow: 2,
-                            '&:hover': { bgcolor: 'background.paper' }
-                          }}
-                        />
-                        {/* Media Preview */}
+                        {/* Select checkbox */}
+                        <Tooltip title='Select'>
+                          <Checkbox
+                            checked={selected.includes(item.id)}
+                            onChange={() => handleSelect(item.id)}
+                            onClick={e => e.stopPropagation()}
+                            sx={{
+                              position: 'absolute',
+                              top: 8,
+                              left: 8,
+                              zIndex: 2,
+                              bgcolor: 'background.paper',
+                              borderRadius: 1,
+                              boxShadow: 2,
+                              '&:hover': { bgcolor: 'background.paper' }
+                            }}
+                          />
+                        </Tooltip>
+
+                        {/* Edit (desktop) */}
+                        {!isMobile ? (
+                          <Tooltip title='Edit'>
+                            <IconButton
+                              size='small'
+                              aria-label='Edit'
+                              onClick={e => {
+                                e.stopPropagation()
+                                handleEditClick(item)
+                              }}
+                              sx={{
+                                position: 'absolute',
+                                top: 8,
+                                right: 8,
+                                zIndex: 2,
+                                bgcolor: 'background.paper',
+                                boxShadow: 5,
+                                '&:hover': { bgcolor: 'action.hover' }
+                              }}
+                            >
+                              <EditIcon fontSize='small' />
+                            </IconButton>
+                          </Tooltip>
+                        ) : null}
+
+                        {/* Thumbnail / Video */}
                         <Box
-                          sx={{
-                            position: 'relative',
-                            height: 200,
-                            bgcolor: 'grey.100',
-                            overflow: 'hidden'
-                          }}
+                          sx={{ position: 'relative', height: 200, bgcolor: 'grey.100', overflow: 'hidden' }}
                           onClick={e => handleMediaClick(item, e)}
                         >
                           <img
                             src={`${cloud}${item.thumbnailUrl || item.fileUrl}`}
                             alt={item.title}
-                            style={{
-                              width: '100%',
-                              height: '100%',
-                              objectFit: 'cover'
-                            }}
+                            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                             onError={e => {
                               e.currentTarget.style.display = 'none'
                             }}
                           />
 
-                          {/* Video Play Overlay */}
                           {item.type === 'video' && (
                             <>
                               <Box
@@ -418,7 +602,6 @@ export default function MediaPage() {
                                 <PlayIcon sx={{ color: 'white', fontSize: 28, ml: 0.5 }} />
                               </Box>
 
-                              {/* Duration Badge */}
                               {item.duration && (
                                 <Chip
                                   icon={<TimeIcon sx={{ fontSize: 14 }} />}
@@ -428,7 +611,7 @@ export default function MediaPage() {
                                     position: 'absolute',
                                     bottom: 8,
                                     right: 8,
-                                    bgcolor: 'rgba(0, 0, 0, 0.8)',
+                                    bgcolor: 'rgba(0, 0, 0, 0.3)',
                                     color: 'white',
                                     '& .MuiChip-icon': { color: 'white' }
                                   }}
@@ -438,7 +621,7 @@ export default function MediaPage() {
                           )}
                         </Box>
 
-                        {/* Card Content */}
+                        {/* Card body */}
                         <CardContent sx={{ flexGrow: 1 }}>
                           <Typography
                             variant='h6'
@@ -451,12 +634,12 @@ export default function MediaPage() {
                               whiteSpace: 'nowrap'
                             }}
                           >
-                            {item.title}
+                            {item.id} / {item.title}
                           </Typography>
 
-                          <Box sx={{ display: 'flex', alignItems: 'center', color: 'text.secondary' }}>
-                            <StorageIcon sx={{ fontSize: 16, mr: 1 }} />
+                          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                             <Typography variant='caption'>{formatFileSize(item.fileSize)}</Typography>
+                            <Typography variant='caption'>Size : {item.aspectRatio} px</Typography>
                           </Box>
                         </CardContent>
                       </Card>
@@ -468,16 +651,13 @@ export default function MediaPage() {
           </Card>
         )}
 
-        {/* Enhanced Modal */}
+        {/* Preview Modal */}
         <Modal
           open={modalOpen}
           onClose={handleModalClose}
           closeAfterTransition
           BackdropComponent={Backdrop}
-          BackdropProps={{
-            timeout: 500,
-            sx: { bgcolor: 'rgba(0, 0, 0, 0.8)' }
-          }}
+          BackdropProps={{ timeout: 500, sx: { bgcolor: 'rgba(0, 0, 0, 0.8)' } }}
         >
           <Fade in={modalOpen}>
             <Box
@@ -496,32 +676,38 @@ export default function MediaPage() {
                 overflow: 'auto'
               }}
             >
-              {/* Modal Header */}
-              <CardHeader
-                title={currentMedia?.title}
-                action={
-                  <IconButton onClick={handleModalClose}>
-                    <CloseIcon />
-                  </IconButton>
-                }
-                sx={{ pb: 1 }}
-              />
+              {/* Close btn */}
+              <DialogCloseButton
+                onClick={handleModalClose}
+                disableRipple
+                sx={{
+                  position: 'absolute',
+                  top: 15,
+                  right: 15,
+                  width: 40,
+                  height: 40,
+                  borderRadius: '50%',
+                  bgcolor: theme => (theme.palette.mode === 'dark' ? 'rgba(0,0,0,0.5)' : 'rgba(255,255,255,0.7)'),
+                  backdropFilter: 'blur(6px)',
+                  color: 'text.primary',
+                  boxShadow: 3,
+                  border: theme => `1px solid ${theme.palette.divider}`,
+                  '&:hover': { boxShadow: 4 }
+                }}
+              >
+                <i className='bx-x' />
+              </DialogCloseButton>
 
+              <CardHeader title={currentMedia?.title} sx={{ pb: 1, pr: 10 }} />
               <Divider />
 
-              {/* Modal Content */}
               {currentMedia && (
                 <CardContent sx={{ p: 3 }}>
                   {currentMedia.type === 'video' ? (
                     <video
                       controls
                       autoPlay
-                      style={{
-                        width: '100%',
-                        maxHeight: '60vh',
-                        borderRadius: 8,
-                        backgroundColor: '#000'
-                      }}
+                      style={{ width: '100%', maxHeight: '60vh', borderRadius: 8, backgroundColor: '#000' }}
                     >
                       <source src={`${cloud}${currentMedia.fileUrl}`} type='video/mp4' />
                       Your browser does not support the video tag.
@@ -531,20 +717,17 @@ export default function MediaPage() {
                       <img
                         src={`${cloud}${currentMedia.fileUrl || currentMedia.thumbnailUrl}`}
                         alt={currentMedia.title}
-                        style={{
-                          maxWidth: '100%',
-                          maxHeight: '60vh',
-                          objectFit: 'contain',
-                          borderRadius: 8
-                        }}
+                        style={{ maxWidth: '100%', maxHeight: '60vh', objectFit: 'contain', borderRadius: 8 }}
                       />
                     </Box>
                   )}
 
-                  {/* Media Details */}
                   <Box sx={{ mt: 3, ml: 2 }}>
                     <Typography variant='h6' sx={{ mb: 2 }}>
-                      Details
+                      Details :{' '}
+                      {currentMedia.description && currentMedia.description.trim() !== ''
+                        ? currentMedia.description
+                        : '-'}
                     </Typography>
                     <Stack direction='row' spacing={2} flexWrap='wrap'>
                       <Chip
@@ -560,20 +743,132 @@ export default function MediaPage() {
                   </Box>
                 </CardContent>
               )}
-
-              {/* Modal Actions */}
-              {/* <CardActions sx={{ justifyContent: 'flex-end', px: 3, pb: 3 }}>
-              <Button startIcon={<DownloadIcon />} variant='outlined'>
-                Download
-              </Button>
-              <Button onClick={handleModalClose} variant='contained'>
-                Close
-              </Button>
-            </CardActions> */}
             </Box>
           </Fade>
         </Modal>
+
+        {/* Edit Dialog */}
+        <Dialog
+          open={editOpen}
+          onClose={handleEditClose}
+          closeAfterTransition={false}
+          sx={{ '& .MuiDialog-paper': { overflow: 'visible' } }}
+          fullWidth
+          maxWidth='sm'
+        >
+          <DialogCloseButton onClick={handleEditClose} disableRipple>
+            <i className='bx-x' />
+          </DialogCloseButton>
+
+          <DialogTitle variant='h4' className='flex flex-col gap-2 text-center p-6 sm:pbs-16 sm:pbe-6 sm:pli-16'>
+            Edit Media
+            <Typography component='span' className='flex flex-col text-center'>
+              Edit data
+            </Typography>
+          </DialogTitle>
+
+          <form
+            onSubmit={e => {
+              e.preventDefault()
+              handleEditSave()
+            }}
+          >
+            <DialogContent className='overflow-visible pbs-0 p-6 sm:pli-16'>
+              <Grid container spacing={6}>
+                <Grid item xs={12}>
+                  <Typography variant='subtitle2' color='text.secondary' sx={{ mb: 1 }}>
+                    Type
+                  </Typography>
+                  <Typography variant='body1' sx={{ fontWeight: 600 }}>
+                    {editMedia?.type?.toUpperCase() || '-'}
+                  </Typography>
+                </Grid>
+
+                <Grid item xs={12}>
+                  <CustomTextField
+                    fullWidth
+                    autoComplete='off'
+                    label='Title'
+                    value={editTitle}
+                    onChange={e => setEditTitle(e.target.value)}
+                    variant='standard'
+                  />
+                </Grid>
+
+                <Grid item xs={12}>
+                  <TextField
+                    fullWidth
+                    rows={4}
+                    multiline
+                    label='Description'
+                    variant='outlined'
+                    value={editDescription}
+                    onChange={e => setEditDescription(e.target.value)}
+                  />
+                </Grid>
+              </Grid>
+            </DialogContent>
+
+            <DialogActions className='justify-center pbs-0 p-6 sm:pbe-16 sm:pli-16'>
+              <Button variant='contained' type='submit' disabled={isSaving || !!isUnchanged}>
+                {isSaving ? 'Saving...' : 'Save'}
+              </Button>
+              <Button variant='tonal' type='button' color='secondary' onClick={handleEditClose}>
+                Cancel
+              </Button>
+            </DialogActions>
+          </form>
+        </Dialog>
       </Box>
+
+      {/* Actions menu (ยังไม่แสดงปุ่มเรียกในการ์ด) */}
+      <Menu
+        anchorEl={actionAnchor}
+        open={Boolean(actionAnchor)}
+        onClose={handleCloseActions}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+        transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+        onClick={e => e.stopPropagation()}
+      >
+        <MenuItem onClick={handleEditFromMenu}>
+          <ListItemIcon>
+            <EditIcon fontSize='small' />
+          </ListItemIcon>
+          <ListItemText>Edit</ListItemText>
+        </MenuItem>
+
+        <MenuItem onClick={() => actionItem && handleDeleteSingle(actionItem.id)} disabled={deleting}>
+          <ListItemIcon>
+            <DeleteIcon fontSize='small' />
+          </ListItemIcon>
+          <ListItemText>{deleting ? 'Deleting...' : 'Delete'}</ListItemText>
+        </MenuItem>
+
+        <MenuItem
+          onClick={() => {
+            handleCloseActions()
+
+            // TODO: download if needed
+            // window.open(`${cloud}${actionItem?.fileUrl}`, '_blank')
+          }}
+        >
+          <ListItemIcon>
+            <DownloadIcon fontSize='small' />
+          </ListItemIcon>
+          <ListItemText>Download</ListItemText>
+        </MenuItem>
+      </Menu>
+
+      <Snackbar open={toast.open} autoHideDuration={3000} onClose={() => setToast({ ...toast, open: false })}>
+        <Alert
+          onClose={() => setToast({ ...toast, open: false })}
+          severity={toast.sev}
+          variant='filled'
+          sx={{ width: '100%' }}
+        >
+          {toast.msg}
+        </Alert>
+      </Snackbar>
     </>
   )
 }

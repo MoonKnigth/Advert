@@ -1,7 +1,8 @@
+//src/views/pages/wizard-examples/property-listing/index.tsx
 'use client'
 
 // React Imports
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { Icon } from '@iconify/react'
 
@@ -16,13 +17,15 @@ import Typography from '@mui/material/Typography'
 import type { StepProps } from '@mui/material/Step'
 
 // Component Imports
+import Cookies from 'js-cookie'
+
 import CustomAvatar from '@core/components/mui/Avatar'
 import StepPersonalDetails from './StepPersonalDetails'
 import StepPropertyDetails from './StepPropertyDetails'
 import StepPropertyFeatures from './StepPropertyFeatures'
 
 import StepperWrapper from '@core/styles/stepper'
-import Cookies from 'js-cookie'
+import type { MediaItem } from '@/types/media'
 
 const steps = [
   {
@@ -42,17 +45,78 @@ const steps = [
   }
 ]
 
-type MediaItem = {
-  id: number
-  title: string
-  type: string
-  fileUrl: string | null
-  thumbnailUrl: string | null
-  duration: number | null
-  fileSize: number | null
-  status: number | null
-  aspectRatio: string | null
+// ---- helpers สำหรับ media (วางบนสุดของไฟล์) ----
+const extractMediaArray = (payload: any): any[] => {
+  if (!payload) return []
+
+  const directCandidates: any[] = [
+    payload?.data?.media,
+    payload?.media,
+    payload?.data?.data,
+    payload?.data?.items,
+    payload?.items,
+    payload?.results
+  ]
+
+  for (const c of directCandidates) {
+    if (Array.isArray(c)) return c
+    if (c && typeof c === 'object' && Array.isArray((c as any).data)) return (c as any).data
+  }
+
+  // deep scan
+  const seen = new Set<any>()
+  const stack = [payload]
+
+  while (stack.length) {
+    const cur: any = stack.pop()
+
+    if (!cur || typeof cur !== 'object' || seen.has(cur)) continue
+    seen.add(cur)
+
+    if (Array.isArray(cur)) {
+      if (
+        cur.length > 0 &&
+        typeof cur[0] === 'object' &&
+        ('fileUrl' in cur[0] || 'file_url' in cur[0] || 'url' in cur[0] || 'title' in cur[0] || 'name' in cur[0])
+      ) {
+        return cur
+      }
+
+      continue
+    }
+
+    for (const v of Object.values(cur)) if (v && typeof v === 'object') stack.push(v)
+  }
+
+  return []
 }
+
+const normalizeMedia = (m: any) => {
+  const typeRaw = (m?.type ?? m?.fileType ?? '').toString().toLowerCase()
+  const type = typeRaw === 'video' ? 'video' : 'image'
+
+  return {
+    id: Number(m?.id ?? m?.media_id ?? m?.mediaId ?? 0),
+    title: m?.title ?? m?.name ?? '',
+    type,
+    fileUrl: m?.fileUrl ?? m?.file_url ?? m?.url ?? '',
+    thumbnailUrl: m?.thumbnailUrl ?? m?.thumbnail_url ?? m?.thumb_url ?? undefined,
+    duration: m?.duration != null ? Number(m.duration) : null,
+    videoType: m?.videoType ?? m?.mime ?? null
+  }
+}
+
+// type MediaItem = {
+//   id: number
+//   title: string
+//   type: string
+//   fileUrl: string | null
+//   thumbnailUrl: string | null
+//   duration: number | null
+//   fileSize: number | null
+//   status: number | null
+//   aspectRatio: string | null
+// }
 
 type UploadedFile = {
   file: File
@@ -108,6 +172,7 @@ const Step = styled(MuiStep)<StepProps>({
 const PropertyListingWizard = () => {
   const [activeStep, setActiveStep] = useState<number>(0)
   const [selectedOrientation, setSelectedOrientation] = useState<'landscape' | 'portrait'>('landscape')
+
   const getRoundedTime = (date: Date = new Date()): Date => {
     const rounded = new Date(date)
     const minutes = rounded.getMinutes()
@@ -125,7 +190,24 @@ const PropertyListingWizard = () => {
     return rounded
   }
 
+  // อย่างน้อย 15 นาที
+  const MIN_GAP_MS = 15 * 60 * 1000
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const ensureMinEnd = useCallback(
+    (start: Date | null, end: Date | null) => {
+      if (!start) return end
+      const minEnd = new Date(start.getTime() + MIN_GAP_MS)
+
+      if (!end || end < minEnd) return minEnd
+
+      return end
+    },
+    [MIN_GAP_MS]
+  )
+
   const [startDateTime, setStartDateTime] = useState<Date | null>(getRoundedTime())
+
   // const [startDateTime, setStartDateTime] = useState<Date | null>(new Date())
   const [endDateTime, setEndDateTime] = useState<Date | null>(null)
 
@@ -137,13 +219,17 @@ const PropertyListingWizard = () => {
   const [adDescription, setAdDescription] = useState<string>('')
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([])
   const [deviceInfo, setDeviceInfo] = useState<any[]>([])
-  const [scheduleAssignments, setScheduleAssignments] = useState<any[]>([])
   const selectedOldFiles = oldFiles.filter(file => selected.includes(file.id))
   const [mediaList, setMediaList] = useState<any[]>([])
   const [scheduleList, setScheduleList] = useState<any[]>([])
   const [selectedDeviceIds, setSelectedDeviceIds] = useState<string[]>([])
 
   const handleNext = () => {
+    // ตรวจตอนออกจากสเต็ปที่ 0
+    if (activeStep === 0) {
+      setEndDateTime(prev => ensureMinEnd(startDateTime, prev))
+    }
+
     if (activeStep !== steps.length - 1) {
       setActiveStep(activeStep + 1)
     } else {
@@ -160,8 +246,10 @@ const PropertyListingWizard = () => {
   const fetchScheduleAssignments = async () => {
     try {
       const accessToken = Cookies.get('accessToken')
+
       if (!accessToken) {
         console.error('Access token is missing!')
+
         return
       }
 
@@ -178,6 +266,7 @@ const PropertyListingWizard = () => {
       if (res.ok) {
         try {
           const data = JSON.parse(text) as DeviceApiResponse
+
           setDeviceInfo(data.data || [])
           console.log('Parsed Data:', data)
         } catch (e) {
@@ -191,41 +280,45 @@ const PropertyListingWizard = () => {
     }
   }
 
+  // เมื่อ start เปลี่ยน ให้ตั้ง end ขั้นต่ำ = start + 15 นาที
   useEffect(() => {
+    setEndDateTime(prev => ensureMinEnd(startDateTime, prev))
+  }, [ensureMinEnd, startDateTime])
+
+  // กันกรณีผู้ใช้กรอก end ที่สั้นกว่า 15 นาที
+  useEffect(() => {
+    if (!startDateTime || !endDateTime) return
+    const minEnd = new Date(startDateTime.getTime() + MIN_GAP_MS)
+
+    if (endDateTime < minEnd) setEndDateTime(minEnd)
+  }, [MIN_GAP_MS, endDateTime, startDateTime])
+  const didFetchRef = useRef(false)
+
+  useEffect(() => {
+    if (didFetchRef.current) return
+    didFetchRef.current = true
     fetchData()
   }, [])
 
   const fetchData = async () => {
     const accessToken = Cookies.get('accessToken')
+
     if (!accessToken) return
 
     try {
       const fetchJSON = async <T = any,>(url: string, method: 'GET' | 'POST'): Promise<T> => {
         const res = await fetch(url, {
           method,
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            'Content-Type': 'application/json'
-          }
+          headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' }
         })
 
-        if (!res.ok) {
-          throw new Error(`HTTP error! status: ${res.status}`)
-        }
-
+        if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`)
         const text = await res.text()
-        if (!text.trim()) {
-          throw new Error('Empty response')
-        }
-        if (text.trim().startsWith('<')) {
-          throw new Error(`Received HTML response instead of JSON. Status: ${res.status}`)
-        }
 
-        try {
-          return JSON.parse(text) as T
-        } catch (parseError) {
-          throw new Error(`Invalid JSON response: ${text.substring(0, 100)}...`)
-        }
+        if (!text.trim()) throw new Error('Empty response')
+        if (text.trim().startsWith('<')) throw new Error(`Received HTML instead of JSON. Status: ${res.status}`)
+
+        return JSON.parse(text) as T
       }
 
       let deviceData: DeviceApiResponse = { data: [] }
@@ -233,87 +326,71 @@ const PropertyListingWizard = () => {
       let mediaData: MediaApiResponse = { data: { media: [] } }
       let scheduleListData: ScheduleListApiResponse = { data: { data: [] } }
 
+      // 👇 เพิ่มตัวแปรให้มี scope ภายนอก try ภายในย่อย
+      let schedulesArr: any[] = []
+
+      // devices
       try {
         deviceData = await fetchJSON<DeviceApiResponse>('/api/auth/device', 'POST')
       } catch (err) {
         console.error('Device data fetch failed:', err)
       }
 
+      // schedules (แบบรายอุปกรณ์)
       try {
-        scheduleData = await fetchJSON<ScheduleApiResponse>('/api/auth/schedule-assignments', 'POST')
+        scheduleData = await fetchJSON<ScheduleApiResponse>('/api/auth/schedule-assignments?raw=1', 'GET')
       } catch (err) {
         console.error('Schedule data fetch failed:', err)
       }
 
+      // media
       try {
         mediaData = await fetchJSON<MediaApiResponse>('/api/auth/media', 'GET')
+        const parsed = extractMediaArray(mediaData).map(normalizeMedia)
+
+        console.log('[Wizard] parsed media:', parsed.length, parsed.slice(0, 3))
+        setMediaList(parsed)
       } catch (err) {
         console.warn('Media data fetch failed:', err)
+        setMediaList([])
       }
 
+      // schedules list (อีก endpoint)
       try {
         scheduleListData = await fetchJSON<ScheduleListApiResponse>('/api/proxy/schedules', 'GET')
+        schedulesArr = Array.isArray((scheduleListData as any)?.data)
+          ? (scheduleListData as any).data
+          : Array.isArray((scheduleListData as any)?.data?.data)
+            ? (scheduleListData as any).data.data
+            : []
+        console.log('📋 Processing schedules:', schedulesArr)
       } catch (err) {
         console.warn('Schedule list fetch failed:', err)
+        schedulesArr = []
       }
 
-      // ✅ ปรับปรุงการดึงรายละเอียด schedule
-      const schedulesWithDetails: any[] = []
-      console.log('📋 Processing schedules:', scheduleListData.data?.data)
+      // สร้าง map สำหรับ schedules_today / schedules_coming แล้ว merge กับ device
+      const scheduleTodayMap = new Map<string, any>()
 
-      if (scheduleListData.data?.data) {
-        for (const schedule of scheduleListData.data.data) {
-          try {
-            console.log(`🔄 Fetching details for schedule ID: ${schedule.id}`)
-            const detailResponse = await fetch(`/api/schedules/${schedule.id}`, {
-              method: 'GET',
-              headers: {
-                Authorization: `Bearer ${accessToken}`,
-                'Content-Type': 'application/json'
-              }
-            })
+      const scheduleComingMap = new Map<string, any[]>()
 
-            if (detailResponse.ok) {
-              const detailText = await detailResponse.text()
-              const detailData = JSON.parse(detailText)
-              console.log(`✅ Schedule ${schedule.id} details:`, detailData)
+      ;(Array.isArray((scheduleData as any)?.data) ? (scheduleData as any).data : []).forEach((item: any) => {
+        const devId = item.device_id || item.deviceId
 
-              // ✅ ตรวจสอบว่ามี adsItems หรือไม่
-              const scheduleDetail = detailData.data || detailData
-              console.log(`📋 AdsItems for schedule ${schedule.id}:`, scheduleDetail?.adsItems)
-
-              if (scheduleDetail) {
-                schedulesWithDetails.push(scheduleDetail)
-              } else {
-                schedulesWithDetails.push(detailData)
-              }
-            } else {
-              console.warn(`⚠️ Failed to fetch details for schedule ${schedule.id}: ${detailResponse.status}`)
-              schedulesWithDetails.push(schedule)
-            }
-          } catch (err) {
-            console.warn(`❌ Error fetching details for schedule ${schedule.id}:`, err)
-            schedulesWithDetails.push(schedule)
-          }
-        }
-      }
-
-      // console.log('📋 Final schedules with details:', schedulesWithDetails)
-
-      const scheduleMap = new Map()
-      scheduleData.data?.forEach((item: any) => {
-        scheduleMap.set(item.device_id, item.schedules_today)
+        if (!devId) return
+        scheduleTodayMap.set(devId, item.schedules_today ?? item.schedulesToday ?? null)
+        scheduleComingMap.set(devId, item.schedules_coming ?? item.schedulesComing ?? [])
       })
 
-      const mergedDevices =
-        deviceData.data?.map((device: any) => ({
-          ...device,
-          schedules_today: scheduleMap.get(device.device_id) || null
-        })) || []
+      const mergedDevices = (deviceData.data || []).map((device: any) => ({
+        ...device,
+        schedules_today: scheduleTodayMap.get(device.device_id) || null,
+        schedules_coming: scheduleComingMap.get(device.device_id) || []
+      }))
 
       setDeviceInfo(mergedDevices)
-      setMediaList(mediaData.data?.media || [])
-      setScheduleList(schedulesWithDetails)
+
+      // setScheduleList(schedulesWithDetails.length ? schedulesWithDetails : schedulesArr)
     } catch (err) {
       console.error('Error loading data:', err)
       setDeviceInfo([])

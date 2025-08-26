@@ -1,5 +1,6 @@
 // libs/api/fetchWithAuth.ts
 import Cookies from 'js-cookie'
+
 import { refreshToken } from '../auth/refreshToken'
 
 export const fetchWithAuth = async (url: string, options: RequestInit = {}) => {
@@ -16,7 +17,10 @@ export const fetchWithAuth = async (url: string, options: RequestInit = {}) => {
     if (res.status === 401) {
         // ลอง refresh token
         try {
-            token = await refreshToken()
+            const refreshedToken = await refreshToken()
+
+            token = refreshedToken === null ? undefined : refreshedToken
+
             const retry = await fetch(url, {
                 ...options,
                 headers: {
@@ -24,6 +28,8 @@ export const fetchWithAuth = async (url: string, options: RequestInit = {}) => {
                     Authorization: `Bearer ${token}`
                 }
             })
+
+
             return retry
         } catch (err) {
             throw new Error('Unauthorized and refresh token failed')

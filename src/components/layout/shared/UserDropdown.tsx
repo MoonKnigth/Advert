@@ -3,10 +3,12 @@
 // React Imports
 import { useRef, useState } from 'react'
 import type { MouseEvent } from 'react'
+
+import { useRouter } from 'next/navigation'
+
 import Cookies from 'js-cookie'
 
 // Next Imports
-import { useRouter } from 'next/navigation'
 
 // MUI Imports
 import { styled } from '@mui/material/styles'
@@ -68,40 +70,45 @@ const UserDropdown = () => {
   const handleUserLogout = async () => {
     // ดึง refreshToken จากคุกกี้
     const refreshToken = Cookies.get('refreshToken')
-
-    if (!refreshToken) {
-      console.error('No refresh token found')
-      return
-    }
+    const accessToken = Cookies.get('accessToken')
 
     try {
-      // ส่งคำขอไปยัง route ที่สร้างใน Next.js API
-      const response = await fetch('/api/auth/logout', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          refresh_token: refreshToken // ส่ง refresh_token ไปยัง API
-        })
-      })
-
-      const data = await response.json()
-
-      if (data.success) {
-        console.log('Logout successful:', data.message)
-
-        // ลบคุกกี้ accessToken และ refreshToken
-        Cookies.remove('accessToken')
-        Cookies.remove('refreshToken')
-
-        // เปลี่ยนเส้นทางไปยังหน้า Login
-        router.push('/pages/auth/login')
+      if (!refreshToken) {
+        console.warn('No refresh token found, skipping logout API call')
       } else {
-        console.error('Logout failed:', data.message)
+        // เรียก API logout ที่ Next.js backend
+        const response = await fetch('/api/auth/logout', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}) // ส่ง accessToken ไปด้วยถ้ามี
+          },
+          body: JSON.stringify({ refresh_token: refreshToken, device_type: 'web' })
+        })
+
+        if (!response.ok) {
+          console.error('Logout failed:', response.statusText)
+        } else {
+          const data = await response.json()
+
+          if (!data.success) {
+            console.error('Logout error from server:', data.message)
+          }
+        }
       }
     } catch (error) {
       console.error('Error during logout:', error)
+    } finally {
+      // เคลียร์คุกกี้ + redirect เสมอ
+      Cookies.remove('accessToken', { path: '/' })
+      Cookies.remove('refreshToken', { path: '/' })
+
+      // (ทางเลือก) แจ้งแท็บอื่นให้ logout ด้วย
+      try {
+        new BroadcastChannel('auth').postMessage({ type: 'logout' })
+      } catch {}
+
+      router.replace('/pages/auth/login') // ใช้ replace กันย้อนกลับด้วยปุ่ม Back
     }
   }
 

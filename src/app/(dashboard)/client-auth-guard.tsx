@@ -1,8 +1,11 @@
+// src/app/(dashboard)/client-auth-guard.tsx
 'use client'
 
-import { useRouter, usePathname } from 'next/navigation'
-import Cookies from 'js-cookie'
 import { useEffect } from 'react'
+
+import { useRouter, usePathname } from 'next/navigation'
+
+import Cookies from 'js-cookie'
 
 const ClientAuthGuard = ({ children }: { children: React.ReactNode }) => {
   const router = useRouter()
@@ -10,6 +13,7 @@ const ClientAuthGuard = ({ children }: { children: React.ReactNode }) => {
 
   useEffect(() => {
     const token = Cookies.get('accessToken')
+
     if (!token) {
       console.warn('⛔ Token missing or expired. Redirecting...')
       router.replace('pages/auth/login')

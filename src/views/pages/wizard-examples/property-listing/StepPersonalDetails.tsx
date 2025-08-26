@@ -563,7 +563,7 @@ const DeviceDialog = memo(function DeviceDialog({
                 ))
               ) : (
                 <Box
-                  className='rounded p-4 flex items-center justify-center w-full'
+                  className='mb-3 rounded p-4 flex items-center justify-center w-full'
                   sx={{
                     backgroundColor: 'rgba(255, 62, 29, 0.08)',
                     borderColor: 'primary.dark',

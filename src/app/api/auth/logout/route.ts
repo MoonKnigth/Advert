@@ -1,35 +1,39 @@
-// api/auth/logout/route.ts
-import axios from 'axios'
+// src/app/api/auth/logout/route.ts
 import { NextResponse } from 'next/server'
 
-export async function POST(request: Request) {
-  const body = await request.json()
-  console.log('Proxy Request Body:', body)
+export async function POST(req: Request) {
+  const body = await req.json().catch(() => ({} as any))
+  const { refresh_token, device_type = 'web' } = body || {}
+  const authHeader = req.headers.get('authorization') // เอา Bearer จาก client
+
+  if (!refresh_token) {
+    return NextResponse.json(
+      { success: false, message: 'refresh_token is required' },
+      { status: 400 }
+    )
+  }
 
   try {
-    // 🔁 ส่งข้อมูลไปยัง API จริง
-    const response = await axios.post('https://signboard.softacular.net/api/auth/logout', body)
+    const upstream = await fetch('https://signboard.softacular.net/api/auth/logout', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(authHeader ? { Authorization: authHeader } : {}) // forward Authorization -> upstream
+      },
+      body: JSON.stringify({ refresh_token, device_type }),
+      cache: 'no-store'
+    })
 
-    console.log('API Response:', response.data)
+    const data = await upstream.json().catch(() => ({}))
 
-    // ✅ ตรวจสอบผลลัพธ์
-    if (response.data?.success) {
-      return NextResponse.json({ success: true, message: 'Logged out successfully.' }, { status: 200 })
-    } else {
-      return NextResponse.json(
-        { success: false, message: response.data?.message || 'Unknown error' },
-        { status: 400 }
-      )
-    }
+    // ส่งต่อสถานะจริงจาก upstream (200/4xx/5xx)
+    return NextResponse.json(data, { status: upstream.status })
   } catch (error: any) {
-    console.error('Logout API Error:', error?.response?.data || error.message)
+    console.error('Logout upstream error:', error?.message)
 
     return NextResponse.json(
-      {
-        success: false,
-        message: error?.response?.data?.message || 'Something went wrong'
-      },
-      { status: error?.response?.status || 500 }
+      { success: false, message: 'Logout upstream error' },
+      { status: 502 }
     )
   }
 }

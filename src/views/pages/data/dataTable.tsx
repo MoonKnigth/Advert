@@ -578,9 +578,9 @@ const DataTable: React.FC = () => {
             sx={{ minWidth: 150 }}
           >
             <MenuItem value='1'>ทั้งหมด</MenuItem>
-            <MenuItem value='2'>วิดีโอ แนวนอน</MenuItem>
-            <MenuItem value='3'>วิดีโอ แนวตั้ง</MenuItem>
-            <MenuItem value='4'>รูปภาพ</MenuItem>
+            <MenuItem value='2'>แนวนอน</MenuItem>
+            <MenuItem value='3'>แนวตั้ง</MenuItem>
+            {/* <MenuItem value='4'>รูปภาพ</MenuItem> */}
           </CustomTextField>
 
           <CustomTextField

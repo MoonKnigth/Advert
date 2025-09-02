@@ -6,6 +6,8 @@ import { Icon } from '@iconify/react'
 import PerfectScrollbar from 'react-perfect-scrollbar'
 
 // Type Imports
+import Typography from '@mui/material/Typography'
+
 import type { VerticalMenuContextProps } from '@menu/components/vertical-menu/Menu'
 
 // Component Imports
@@ -20,7 +22,6 @@ import StyledVerticalNavExpandIcon from '@menu/styles/vertical/StyledVerticalNav
 // Style Imports
 import menuItemStyles from '@core/styles/vertical/menuItemStyles'
 import menuSectionStyles from '@core/styles/vertical/menuSectionStyles'
-import Typography from '@mui/material/Typography'
 
 type RenderExpandIconProps = {
   open?: boolean
@@ -92,6 +93,11 @@ const VerticalMenu = ({ scrollMenu }: Props) => {
         <MenuItem href='/media' icon={<i className='bx-film' />}>
           <Typography variant='h6' className='mt-1'>
             Media
+          </Typography>
+        </MenuItem>
+        <MenuItem href='/schedules' icon={<i className='bx-calendar-event' />}>
+          <Typography variant='h6' className='mt-1'>
+            Schedules
           </Typography>
         </MenuItem>
         <MenuItem href='/test' icon={<Icon icon='eos-icons:atom-electron' width={24} height={24} />}>

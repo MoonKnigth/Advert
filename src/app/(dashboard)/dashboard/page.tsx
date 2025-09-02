@@ -1,8 +1,7 @@
 import React from 'react'
 
 import type { Metadata } from 'next'
-
-import DataTable from '@/views/pages/data/dataTable'
+import Typography from '@mui/material/Typography'
 
 export const metadata: Metadata = {
   title: 'Dashboard'
@@ -13,7 +12,9 @@ export const metadata: Metadata = {
 function Page() {
   return (
     <div>
-      <DataTable></DataTable>
+      <Typography variant='h2' color='initial'>
+        Dashboard
+      </Typography>
     </div>
   )
 }

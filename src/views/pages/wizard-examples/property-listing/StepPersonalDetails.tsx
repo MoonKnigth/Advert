@@ -5,6 +5,13 @@ import { useState, useEffect, memo, useMemo, useCallback } from 'react'
 
 import dynamic from 'next/dynamic'
 
+import { styled } from '@mui/material/styles'
+
+import MuiMenu from '@mui/material/Menu'
+import MuiMenuItem from '@mui/material/MenuItem'
+import type { MenuProps } from '@mui/material/Menu'
+import type { MenuItemProps } from '@mui/material/MenuItem'
+
 import ArrowBackIcon from '@mui/icons-material/ArrowBack'
 import EventAvailableIcon from '@mui/icons-material/EventAvailable'
 import Checkbox from '@mui/material/Checkbox'
@@ -22,12 +29,9 @@ import {
   Typography,
   CardContent,
   CardMedia,
-  DialogActions,
-  MenuItem,
   ListItemIcon,
   ListItemText,
-  IconButton,
-  Menu
+  IconButton
 } from '@mui/material'
 import Cookies from 'js-cookie'
 
@@ -254,14 +258,15 @@ const DeviceGrid = memo(function DeviceGrid({
   onToggleDevice,
   onOpenDevice
 }: DeviceGridProps) {
-  if (!deviceInfo?.length) return <p>กำลังโหลดข้อมูล...</p>
+  if (!Array.isArray(deviceInfo)) return <p>กำลังโหลดข้อมูล...</p>
+  if (deviceInfo.length === 0) return <p>ยังไม่มีอุปกรณ์</p>
 
   return (
     <Grid container spacing={2}>
       {deviceInfo.map((device, index) => {
         const hasSchedule =
-          device.__hasSchedule ||
-          device.schedules_today ||
+          !!device.__hasSchedule ||
+          !!device.schedules_today ||
           (Array.isArray(device.schedules_coming) && device.schedules_coming.length > 0)
 
         return (
@@ -299,6 +304,7 @@ const DeviceGrid = memo(function DeviceGrid({
                 width='100'
                 alt=''
               />
+
               <p>{device.device_id}</p>
               <p>{device.name || 'ไม่ทราบชื่อ'}</p>
               <p>{truncateText(device.description, 15)}</p>
@@ -317,7 +323,7 @@ type DeviceDialogProps = {
   selectedDescription: string | null
   onOpenSchedule: (id: number | string) => void
   onDeleteSchedule: (id: number, type: 'today' | 'coming') => void
-  onDeviceUpdated?: (patch: { name: string; description: string; platform: string }) => void
+  onDeviceUpdated?: (patch: { name: string; description: string; platform: string; revoked?: boolean }) => void
 }
 
 const DeviceDialog = memo(function DeviceDialog({
@@ -336,6 +342,8 @@ const DeviceDialog = memo(function DeviceDialog({
   const [editDescription, setEditDescription] = useState(selectedDevice?.description || '')
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
+  const isRevoked = !!selectedDevice?.revoked
+  const [revoking, setRevoking] = useState(false)
 
   const deviceId = selectedDevice?.device_id
 
@@ -355,6 +363,45 @@ const DeviceDialog = memo(function DeviceDialog({
     editDescription === (selectedDevice?.description || '')
 
   const canSave = !!deviceId && !!editName.trim() && !isUnchanged && !saving
+
+  const handleRevokeDevice = async () => {
+    const id = selectedDevice?.device_id
+
+    if (!id) return
+
+    if (!confirm(`ยืนยันออกจากระบบอุปกรณ์\nID: ${id}`)) return
+
+    try {
+      setRevoking(true)
+
+      const res = await fetch('/api/auth/device/revoke', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ revoke_device_id: id })
+      })
+
+      const data = await res.json().catch(() => ({}))
+
+      if (!res.ok || data?.success === false) {
+        throw new Error(data?.message || `Revoke failed (${res.status})`)
+      }
+
+      // ✅ แจ้งพาเรนต์ให้อัปเดต state ทันที
+      onDeviceUpdated?.({
+        revoked: true,
+        name: selectedDevice?.name,
+        description: selectedDevice?.description,
+        platform: selectedDevice?.platform
+      })
+
+      alert('ออกจากระบบอุปกรณ์สำเร็จ')
+    } catch (e: any) {
+      alert(e?.message || 'ไม่สามารถออกจากระบบอุปกรณ์ได้')
+    } finally {
+      setRevoking(false)
+      handleClose() // ปิดเมนูสามจุด
+    }
+  }
 
   const handleSave = async () => {
     if (!deviceId) return
@@ -403,18 +450,42 @@ const DeviceDialog = memo(function DeviceDialog({
     setAnchorEl(null)
   }
 
+  const Menu = styled(MuiMenu)<MenuProps>({
+    '& .MuiMenu-paper': {
+      border: '1px solid var(--mui-palette-divider)'
+    }
+  })
+
+  // Styled MenuItem component
+  const MenuItem = styled(MuiMenuItem)<MenuItemProps>({
+    '&:focus': {
+      backgroundColor: 'var(--mui-palette-primary-main)',
+      '& .MuiListItemIcon-root, & .MuiListItemText-primary': {
+        color: 'var(--mui-palette-common-white)'
+      }
+    }
+  })
+
   return (
     <Dialog open={open} onClose={onClose} maxWidth='md' fullWidth>
       <CardContent className='flex flex-col gap-4'>
         <div className='flex justify-between items-center'>
           <CardContent className='flex flex-col gap-4 p-0'>
             <div className='flex items-center gap-3'>
-              <CustomAvatar variant='rounded' skin='light' color='primary' size={60}>
+              <CustomAvatar variant='rounded' skin='light' color='primary' size={70}>
                 <i className='bx-tv' />
               </CustomAvatar>
               <div className='flex justify-between items-center'>
                 <div className='flex flex-col items-start'>
-                  <Typography variant='h6'>{selectedDevice?.name || 'ไม่ทราบชื่อ'}</Typography>
+                  <Box sx={{ mt: 0.5, display: 'flex', alignItems: 'center', gap: 2 }}>
+                    <Typography variant='h5'>{selectedDevice?.name || 'ไม่ทราบชื่อ'}</Typography>
+                    <Chip
+                      size='small'
+                      label={isRevoked ? 'ออกจากระบบ' : 'เข้าสู่ระบบ'}
+                      color={isRevoked ? 'error' : 'success'}
+                      variant='filled'
+                    />
+                  </Box>
                   <Typography variant='body2'>ID: {selectedDevice?.device_id}</Typography>
                   <Typography variant='body2'>Description: {selectedDescription || 'ไม่มีข้อมูลอุปกรณ์'}</Typography>
                 </div>
@@ -448,6 +519,18 @@ const DeviceDialog = memo(function DeviceDialog({
                 </ListItemIcon>
                 <ListItemText primary='แก้ไขข้อมูลอุปกรณ์' />
               </MenuItem>
+              <MenuItem
+                disabled={revoking || selectedDevice?.revoked === true}
+                onClick={async () => {
+                  await handleRevokeDevice()
+                }}
+              >
+                <ListItemIcon>
+                  <i className='bx bx-exit' />
+                </ListItemIcon>
+                <ListItemText primary={revoking ? 'กำลังออกจากระบบ…' : 'ออกจากระบบอุปกรณ์'} />
+              </MenuItem>
+
               <MenuItem>
                 <ListItemIcon>
                   <i className='bx bx-trash' />
@@ -489,22 +572,22 @@ const DeviceDialog = memo(function DeviceDialog({
                   </Alert>
                 )}
               </Box>
+              <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 5, mt: 3 }}>
+                <Button onClick={() => setOpenEditDevice(false)} disabled={saving}>
+                  ยกเลิก
+                </Button>
+                <Button variant='contained' onClick={handleSave} disabled={!canSave}>
+                  {saving ? 'กำลังบันทึก...' : 'บันทึก'}
+                </Button>
+              </Box>
             </DialogContent>
-            <DialogActions>
-              <Button onClick={() => setOpenEditDevice(false)} disabled={saving}>
-                ยกเลิก
-              </Button>
-              <Button variant='contained' onClick={handleSave} disabled={!canSave}>
-                {saving ? 'กำลังบันทึก...' : 'บันทึก'}
-              </Button>
-            </DialogActions>
+            {/* <DialogActions></DialogActions> */}
           </Dialog>
         </div>
       </CardContent>
 
       <DialogContent sx={{ m: 0, p: 0 }}>
         <Box sx={{ display: 'flex', flexDirection: 'column' }}>
-          {/* วันนี้ */}
           <CardContent className='flex flex-col gap-y-4'>
             <div className='plb-3 pli-4 flex flex-col gap-x-4 bg-actionHover rounded'>
               <div className='flex justify-start my-3'>
@@ -823,6 +906,8 @@ const StepPersonalDetails = ({
   const [selectedDescription, setSelectedDescription] = useState<string | null>(null)
   const [hasScheduleCache, setHasScheduleCache] = useState<Record<string, boolean>>({})
 
+  useState
+
   // ✅ เก็บ patch แบบ optimistic ต่ออุปกรณ์ (key = device_id)
   const [devicePatches, setDevicePatches] = useState<
     Record<string, { name?: string; description?: string; platform?: string }>
@@ -906,7 +991,7 @@ const StepPersonalDetails = ({
   }, [deviceInfo])
 
   const handleDeviceUpdated = useCallback(
-    (patch: { name: string; description: string; platform: string }) => {
+    (patch: Partial<{ name: string; description: string; platform: string; revoked: boolean }>) => {
       const id = selectedDevice?.device_id
 
       if (!id) return
@@ -914,13 +999,21 @@ const StepPersonalDetails = ({
       // 1) อัปเดต dialog ที่เปิดอยู่ทันที
       setSelectedDevice((prev: any) => (prev ? { ...prev, ...patch } : prev))
 
-      // ถ้าอยากให้บรรทัด Description บนหัว dialog อัปเดตด้วย
-      setSelectedDescription(prev => (typeof patch.description === 'string' ? patch.description : prev))
+      // 2) อัปเดต Grid ทันที (เก็บเฉพาะฟิลด์ที่อยู่ใน devicePatches)
+      setDevicePatches(prev => ({
+        ...prev,
+        [id]: {
+          ...(prev[id] || {}),
+          ...(patch.name !== undefined ? { name: patch.name } : {}),
+          ...(patch.description !== undefined ? { description: patch.description } : {}),
+          ...(patch.platform !== undefined ? { platform: patch.platform } : {})
 
-      // 2) อัปเดต Grid ทันที
-      setDevicePatches(prev => ({ ...prev, [id]: { ...(prev[id] || {}), ...patch } }))
+          // หมายเหตุ: revoked ไม่ได้เก็บใน devicePatches เดิม ถ้าอยากให้แสดงในการ์ดด้วย
+          // อาจเพิ่ม type ของ devicePatches ให้รองรับ revoked แล้ว patch ตรงนี้ด้วย
+        }
+      }))
 
-      // 3) revalidate เบื้องหลัง
+      // 3) ถ้าต้องการ sync backend → โหลดใหม่
       fetchDeviceInfo?.()
     },
     [selectedDevice, fetchDeviceInfo]
@@ -939,6 +1032,12 @@ const StepPersonalDetails = ({
   const [assetSrc, setAssetSrc] = useState<string | null>(null)
 
   // mounted
+  // ถ้า deviceInfo ยังว่าง ให้ลองดึงอีกรอบอัตโนมัติ
+  useEffect(() => {
+    if (!Array.isArray(deviceInfo) || deviceInfo.length === 0) {
+      fetchDeviceInfo?.()
+    }
+  }, [deviceInfo, fetchDeviceInfo])
 
   useEffect(() => setMounted(true), [])
 

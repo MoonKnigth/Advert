@@ -4,6 +4,8 @@ import React, { useEffect, useMemo, useState, startTransition } from 'react'
 
 import type { SyntheticEvent } from 'react'
 
+import { styled, useTheme } from '@mui/material/styles'
+
 import {
   Card,
   CardContent,
@@ -12,7 +14,6 @@ import {
   Grid,
   Alert,
   Tab,
-  Checkbox,
   Button,
   Modal,
   IconButton,
@@ -29,13 +30,16 @@ import {
   DialogContent,
   TextField,
   DialogActions,
-  Snackbar
+  Snackbar,
+  Pagination
 } from '@mui/material'
 
 // MUI extras
 import Tooltip from '@mui/material/Tooltip'
-import Menu from '@mui/material/Menu'
-import MenuItem from '@mui/material/MenuItem'
+import MuiMenu from '@mui/material/Menu'
+import MuiMenuItem from '@mui/material/MenuItem'
+import type { MenuProps } from '@mui/material/Menu'
+import type { MenuItemProps } from '@mui/material/MenuItem'
 import ListItemIcon from '@mui/material/ListItemIcon'
 import ListItemText from '@mui/material/ListItemText'
 
@@ -45,7 +49,6 @@ import {
   VideoLibrary as VideoIcon,
   Image as ImageIcon,
   Delete as DeleteIcon,
-  SelectAll as SelectAllIcon,
   Download as DownloadIcon,
   AccessTime as TimeIcon,
   Storage as StorageIcon,
@@ -55,7 +58,7 @@ import {
 import Cookies from 'js-cookie'
 import TabContext from '@mui/lab/TabContext'
 import TabList from '@mui/lab/TabList'
-import { useTheme } from '@mui/material/styles'
+
 import useMediaQuery from '@mui/material/useMediaQuery'
 
 import DialogCloseButton from '@/components/dialogs/DialogCloseButton'
@@ -64,7 +67,7 @@ import CustomTextField from '@/@core/components/mui/TextField'
 type MediaItem = {
   id: number
   title: string
-  type: string
+  type: 'video' | 'image'
   fileUrl: string | null
   thumbnailUrl: string | null
   duration: number | null
@@ -74,15 +77,66 @@ type MediaItem = {
   description: string | null
 }
 
+const normalizeMedia = (m: any): MediaItem => {
+  const rawType = String(m?.type ?? m?.file_type ?? '').toLowerCase()
+  const type: 'video' | 'image' = rawType === 'video' ? 'video' : 'image'
+
+  return {
+    id: Number(m?.id ?? 0),
+    title: m?.title ?? m?.name ?? '',
+    type,
+    fileUrl: m?.fileUrl ?? m?.file_url ?? null,
+    thumbnailUrl: m?.thumbnailUrl ?? m?.thumbnail_url ?? null,
+    duration: m?.duration != null ? Number(m.duration) : null,
+    fileSize: m?.file_size != null ? Number(m.file_size) : m?.fileSize != null ? Number(m.fileSize) : null,
+    status: m?.status ?? null,
+    aspectRatio: m?.aspect_ratio ?? m?.aspectRatio ?? null,
+    description: m?.description ?? null
+  }
+}
+
+type ServerMediaResponse = {
+  success?: boolean
+  data?: {
+    media?: any[]
+    page?: number // 0-based (ของ server)
+    size?: number // server page size ที่แท้จริง
+    total_elements?: number
+    total_pages?: number
+  }
+}
+
+const fetchServerMediaPage = async (
+  p: number,
+  size: number,
+  type: 'video' | 'image',
+  token?: string
+): Promise<{ list: any[]; meta: NonNullable<ServerMediaResponse['data']> }> => {
+  const res = await fetch(`/api/auth/media?page=${p}&size=${size}&type=${type}`, {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {})
+    },
+    credentials: 'include',
+    cache: 'no-store'
+  })
+
+  const text = await res.text()
+
+  if (!res.ok) throw new Error(text || `HTTP ${res.status}`)
+  const json = (text ? JSON.parse(text) : {}) as ServerMediaResponse
+  const meta = json.data || {}
+  const arr = Array.isArray(meta.media) ? meta.media : []
+
+  return { list: arr, meta }
+}
+
 export default function MediaPage() {
   const theme = useTheme()
   const isMobile = useMediaQuery(theme.breakpoints.down('md'))
   const cloud = 'https://cloud.softacular.net'
 
-  const [media, setMedia] = useState<MediaItem[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [value, setValue] = useState<string>('1')
   const [selected, setSelected] = useState<number[]>([])
   const [deleting, setDeleting] = useState(false)
 
@@ -101,6 +155,21 @@ export default function MediaPage() {
   const [actionAnchor, setActionAnchor] = useState<HTMLElement | null>(null)
   const [actionItem, setActionItem] = useState<MediaItem | null>(null)
 
+  // Pagination state
+  const [page, setPage] = useState(1) // หน้าเริ่มที่ 1 (MUI)
+  const [rowsPerPage, setRowsPerPage] = useState(12) // จำนวนการ์ดต่อหน้า
+  const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null)
+  const [menuItemId, setMenuItemId] = useState<number | null>(null)
+
+  const [totalPages, setTotalPages] = useState(1)
+  const [media, setMedia] = useState<MediaItem[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  // ถ้ามีแท็บ Videos/Images และอยากกรองที่ฝั่ง server:
+  // '1' = video, '2' = image (ตามโค้ดเดิมของคุณ)
+  const [value, setValue] = useState<'1' | '2'>('1')
+
   // Toast
   const [toast, setToast] = useState<{ open: boolean; msg: string; sev: 'success' | 'error' }>({
     open: false,
@@ -108,21 +177,47 @@ export default function MediaPage() {
     sev: 'success'
   })
 
+  const Menu = styled(MuiMenu)<MenuProps>({
+    '& .MuiMenu-paper': {
+      border: '1px solid var(--mui-palette-divider)'
+    }
+  })
+
+  // Styled MenuItem component
+  const MenuItem = styled(MuiMenuItem)<MenuItemProps>({
+    '&:focus': {
+      backgroundColor: 'var(--mui-palette-primary-main)',
+      '& .MuiListItemIcon-root, & .MuiListItemText-primary': {
+        color: 'var(--mui-palette-common-white)'
+      }
+    }
+  })
+
   const handleChange = (event: SyntheticEvent, newValue: string) => {
     setValue(newValue)
     setSelected([])
   }
 
-  const handleSelect = (id: number, event?: React.MouseEvent) => {
-    event?.stopPropagation()
-    setSelected(prev => (prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id]))
-  }
+  // const handleSelect = (id: number, event?: React.MouseEvent) => {
+  //   event?.stopPropagation()
+  //   setSelected(prev => (prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id]))
+  // }
 
-  const handleSelectAll = () => {
-    if (selected.length === filteredMedia.length) {
-      setSelected([])
-    } else {
-      setSelected(filteredMedia.map(item => item.id))
+  const dropdownPaperSx = {
+    borderRadius: 2,
+    boxShadow: 5,
+    mt: 1,
+    minWidth: 160,
+    '& .MuiMenuItem-root': {
+      fontSize: 14,
+      '&:hover': { bgcolor: 'action.hover' }
+    },
+    '& .MuiMenuItem-root.Mui-selected, & .MuiMenuItem-root.Mui-selected:hover': {
+      bgcolor: 'primary.main',
+      color: 'common.white',
+      '& .MuiListItemIcon-root, & .MuiListItemText-primary': {
+        color: 'common.white'
+      }
     }
   }
 
@@ -174,6 +269,27 @@ export default function MediaPage() {
     setCurrentMedia(null)
   }
 
+  // const handleSelectAll = () => {
+  //   const pageIds = pagedMedia.map(item => item.id)
+  //   const allSelectedOnPage = pageIds.every(id => selected.includes(id))
+
+  //   if (allSelectedOnPage) {
+  //     // เอา id ของ "หน้านี้" ออก
+  //     setSelected(prev => prev.filter(id => !pageIds.includes(id)))
+  //   } else {
+  //     // รวมของเดิม + id ของ "หน้านี้"
+  //     setSelected(prev => Array.from(new Set([...prev, ...pageIds])))
+  //   }
+  // }
+
+  // const handleSelectAll = () => {
+  //   if (selected.length === filteredMedia.length) {
+  //     setSelected([])
+  //   } else {
+  //     setSelected(filteredMedia.map(item => item.id))
+  //   }
+  // }
+
   const formatFileSize = (bytes: number | null) => {
     if (!bytes) return 'N/A'
     const sizes = ['Bytes', 'KB', 'MB', 'GB']
@@ -193,59 +309,75 @@ export default function MediaPage() {
   }
 
   useEffect(() => {
-    const fetchMedia = async () => {
+    const fetchTypedPage = async () => {
       try {
-        const accessToken = Cookies.get('accessToken')
+        setLoading(true)
+        setError(null)
 
-        if (!accessToken) {
-          setError('No access token found')
-          setLoading(false)
+        // '1' = video, '2' = image
+        const currentType: 'video' | 'image' = value === '1' ? 'video' : 'image'
+        const apiPage = Math.max(0, page - 1) // UI 1-based -> API 0-based
+        const token = Cookies.get('accessToken')
 
-          return
-        }
-
-        const res = await fetch('/api/auth/media', {
+        const res = await fetch(`/api/auth/media?page=${apiPage}&size=${rowsPerPage}&type=${currentType}`, {
+          method: 'GET',
+          credentials: 'include',
           headers: {
-            Authorization: `Bearer ${accessToken}`,
-            'Content-Type': 'application/json'
-          }
+            'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {})
+          },
+          cache: 'no-store'
         })
 
-        const rawText = await res.clone().text()
-        let data
+        const text = await res.text()
 
-        try {
-          data = JSON.parse(rawText)
-        } catch (err) {
-          console.error('Invalid JSON:', err)
-          setError('Invalid JSON response')
-          setLoading(false)
+        if (!res.ok) throw new Error(text || `HTTP ${res.status}`)
+        const json = text ? JSON.parse(text) : {}
+        const payload = json?.data ?? {}
 
-          return
-        }
+        // ใช้รายการจาก server ตามหน้าแล้ว (ไม่ slice ซ้ำ, ไม่วนหลายหน้า)
+        const raw = Array.isArray(payload.media) ? payload.media : []
 
-        if (res.ok && data?.data?.success && Array.isArray(data?.data?.data?.media)) {
-          setMedia(data.data.data.media)
-        } else {
-          console.warn('Unexpected data format:', data)
-          setError('Unexpected response structure (missing media array)')
-        }
-      } catch (err) {
-        console.error('Fetch error:', err)
-        setError('Network error occurred')
+        setMedia(raw.map(normalizeMedia))
+
+        // คำนวณจำนวนหน้าจาก meta ของ server
+        const total = Number(payload.total_elements ?? 0)
+        const pagesFromTotal = Math.max(1, Math.ceil(total / rowsPerPage))
+        const pagesFromServer = Number(payload.total_pages ?? pagesFromTotal)
+
+        setTotalPages(pagesFromServer || pagesFromTotal)
+      } catch (err: any) {
+        setError(err?.message || 'Network error')
+        setMedia([])
+        setTotalPages(1)
       } finally {
         setLoading(false)
       }
     }
 
-    fetchMedia()
-  }, [])
+    fetchTypedPage()
+  }, [page, rowsPerPage, value])
 
-  // ✅ memo ช่วยลดงานกรองทุกครั้งที่ re-render
-  const filteredMedia = useMemo(
-    () => media.filter(item => item.status === 1 && (value === '1' ? item.type === 'video' : item.type === 'image')),
-    [media, value]
+  // const displayMedia = useMemo(() => media.filter(item => item.status === 1), [media])
+
+  // ✅ กำหนดชนิดจากแท็บ: '1' = video, '2' = image
+  const currentType: 'video' | 'image' = value === '1' ? 'video' : 'image'
+
+  // ✅ แสดงเฉพาะชนิดที่เลือก + active (status === 1)
+  const displayMedia = useMemo(
+    () => media.filter(item => item.status === 1 && item.type === currentType),
+    [media, currentType]
   )
+
+  // รีเซ็ตเป็นหน้า 1 เมื่อเปลี่ยนแท็บหรือตัวเลือก per-page เท่านั้น (ไม่ผูกกับ media มิฉะนั้นจะเด้งหน้า 1 ตลอด)
+  useEffect(() => {
+    setPage(1)
+  }, [value, rowsPerPage])
+
+  // หนีบหน้าไม่ให้เกินจำนวนหน้ารวมใหม่
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages)
+  }, [totalPages]) // ผูกกับ totalPages ก็พอ
 
   useEffect(() => {
     if (editOpen && editMedia) {
@@ -342,31 +474,33 @@ export default function MediaPage() {
   }
 
   const handleDeleteSingle = async (id: number) => {
-    setDeleting(true)
-
     try {
-      const accessToken = Cookies.get('accessToken')
+      setDeleting(true)
 
-      if (!accessToken) {
-        setError('No access token found')
+      // เรียก API route ฝั่ง Next ของคุณ (อ่าน token จาก cookie ให้อัตโนมัติแล้ว)
+      const res = await fetch(`/api/auth/media/${id}`, { method: 'DELETE' })
+      const text = await res.text()
 
-        return
+      let data: any = null
+
+      try {
+        data = text ? JSON.parse(text) : null
+      } catch {}
+
+      if (!res.ok || data?.success === false) {
+        throw new Error(data?.message || `Delete failed (${res.status})`)
       }
 
-      const res = await fetch('/api/auth/media/delete', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ids: [id] })
-      })
+      // เอา item ออกจาก list บนจอ
+      setMedia(prev => prev.filter(m => m.id !== id))
 
-      if (res.ok) setMedia(prev => prev.filter(m => m.id !== id))
-      else setError('Failed to delete media item')
-    } catch (err) {
-      console.error(err)
-      setError('Error occurred while deleting')
+      // Toast สำเร็จ
+      setToast({ open: true, msg: data?.message || 'Media deleted successfully', sev: 'success' })
+    } catch (err: any) {
+      // Toast/แจ้ง error
+      setToast({ open: true, msg: err?.message || 'Delete failed', sev: 'error' })
     } finally {
       setDeleting(false)
-      handleCloseActions()
     }
   }
 
@@ -398,6 +532,17 @@ export default function MediaPage() {
     )
   }
 
+  const handleMenuOpen = (event: React.MouseEvent<HTMLElement>, id: number) => {
+    event.stopPropagation()
+    setMenuAnchor(event.currentTarget)
+    setMenuItemId(id)
+  }
+
+  const handleMenuClose = () => {
+    setMenuAnchor(null)
+    setMenuItemId(null)
+  }
+
   return (
     <>
       <Typography variant='h4' sx={{ pb: 5, pl: 2, fontWeight: 600, color: 'text.primary' }}>
@@ -416,12 +561,12 @@ export default function MediaPage() {
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                       <VideoIcon />
                       <span>Videos</span>
-                      <Chip
+                      {/* <Chip
                         label={media.filter(item => item.type === 'video' && item.status === 1).length}
                         size='small'
                         color='primary'
                         variant='outlined'
-                      />
+                      /> */}
                     </Box>
                   }
                   sx={{ textTransform: 'none', fontWeight: 600 }}
@@ -432,12 +577,12 @@ export default function MediaPage() {
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                       <ImageIcon />
                       <span>Images</span>
-                      <Chip
+                      {/* <Chip
                         label={media.filter(item => item.type === 'image' && item.status === 1).length}
                         size='small'
                         color='secondary'
                         variant='outlined'
-                      />
+                      /> */}
                     </Box>
                   }
                   sx={{ textTransform: 'none', fontWeight: 600 }}
@@ -448,51 +593,81 @@ export default function MediaPage() {
         </Card>
 
         {/* Actions Bar */}
-        {filteredMedia.length > 0 && (
+        {displayMedia.length > 0 && (
           <Card sx={{ mb: 6, mt: -2 }}>
             <CardContent sx={{ py: 5 }}>
-              <Stack direction='row' spacing={2} alignItems='center' flexWrap='wrap'>
-                <Button
-                  variant={selected.length > 0 ? 'contained' : 'outlined'}
-                  startIcon={<SelectAllIcon />}
-                  onClick={handleSelectAll}
-                  size='small'
-                >
-                  {selected.length === filteredMedia.length ? 'Deselect All' : 'Select All'}
-                </Button>
+              <Stack
+                display={'flex'}
+                justifyContent={'space-between'}
+                flexDirection={{ xs: 'column', md: 'row' }}
+                alignItems={'center'}
+                spacing={2}
+                gap={2}
+              >
+                <Box display={'flex'} gap={2}>
+                  {/* <Button
+                    variant={selected.length > 0 ? 'contained' : 'outlined'}
+                    startIcon={<SelectAllIcon />}
+                    onClick={handleSelectAll}
+                    size='small'
+                  >
+                    {selected.length === filteredMedia.length ? 'Deselect All' : 'Select All'}
+                  </Button> */}
 
-                {selected.length > 0 && (
-                  <Fade in={selected.length > 0}>
-                    <Button
-                      variant='contained'
-                      color='error'
-                      startIcon={<DeleteIcon />}
-                      onClick={handleDelete}
-                      disabled={deleting}
-                      size='small'
-                    >
-                      {deleting ? 'Deleting...' : `Delete (${selected.length})`}
-                    </Button>
-                  </Fade>
-                )}
+                  {selected.length > 0 && (
+                    <Fade in={selected.length > 0}>
+                      <Button
+                        variant='contained'
+                        color='error'
+                        startIcon={<DeleteIcon />}
+                        onClick={handleDelete}
+                        disabled={deleting}
+                        size='small'
+                      >
+                        {deleting ? 'Deleting...' : `Delete (${selected.length})`}
+                      </Button>
+                    </Fade>
+                  )}
 
-                <Box sx={{ ml: 'auto' }}>
-                  <Chip
-                    label={
-                      selected.length > 0
-                        ? `${selected.length} of ${filteredMedia.length} selected`
-                        : `${filteredMedia.length} items total`
-                    }
-                    variant='outlined'
-                    color={selected.length > 0 ? 'primary' : 'default'}
-                  />
+                  <Box>
+                    <Chip
+                      label={
+                        selected.length > 0
+                          ? `${selected.length} of ${displayMedia.length} selected`
+                          : `${displayMedia.length} items total`
+                      }
+                      variant='outlined'
+                      color={selected.length > 0 ? 'primary' : 'default'}
+                    />
+                  </Box>
                 </Box>
+                <TextField
+                  select
+                  sx={{ width: 120 }}
+                  size='small'
+                  label='Items per page'
+                  value={rowsPerPage}
+                  onChange={e => {
+                    setRowsPerPage(Number(e.target.value))
+                    setPage(1)
+                  }}
+                  SelectProps={{
+                    MenuProps: {
+                      PaperProps: { sx: { ...dropdownPaperSx } }
+                    }
+                  }}
+                >
+                  <MenuItem value={8}>8</MenuItem>
+                  <MenuItem value={12}>12</MenuItem>
+                  <MenuItem value={24}>24</MenuItem>
+                  <MenuItem value={48}>48</MenuItem>
+                </TextField>
               </Stack>
             </CardContent>
 
             {/* Grid */}
             <CardContent>
-              {filteredMedia.length === 0 ? (
+              {displayMedia.length === 0 ? (
                 <Paper sx={{ p: 8, textAlign: 'center', bgcolor: 'grey.50' }}>
                   <Avatar sx={{ mx: 'auto', mb: 3, bgcolor: 'grey.200', width: 64, height: 64 }}>
                     {value === '1' ? <VideoIcon sx={{ fontSize: 32 }} /> : <ImageIcon sx={{ fontSize: 32 }} />}
@@ -506,7 +681,7 @@ export default function MediaPage() {
                 </Paper>
               ) : (
                 <Grid container spacing={6}>
-                  {filteredMedia.map(item => (
+                  {displayMedia.map(item => (
                     <Grid item xs={12} sm={6} md={4} lg={3} key={item.id}>
                       <Card
                         sx={{
@@ -520,7 +695,7 @@ export default function MediaPage() {
                         }}
                       >
                         {/* Select checkbox */}
-                        <Tooltip title='Select'>
+                        {/* <Tooltip title='Select'>
                           <Checkbox
                             checked={selected.includes(item.id)}
                             onChange={() => handleSelect(item.id)}
@@ -536,31 +711,72 @@ export default function MediaPage() {
                               '&:hover': { bgcolor: 'background.paper' }
                             }}
                           />
-                        </Tooltip>
+                        </Tooltip> */}
 
                         {/* Edit (desktop) */}
                         {!isMobile ? (
-                          <Tooltip title='Edit'>
-                            <IconButton
-                              size='small'
-                              aria-label='Edit'
-                              onClick={e => {
-                                e.stopPropagation()
-                                handleEditClick(item)
+                          <>
+                            <Tooltip title='More'>
+                              <IconButton
+                                aria-label='more'
+                                aria-controls='long-menu'
+                                aria-haspopup='true'
+                                onClick={e => handleMenuOpen(e, item.id)}
+                                sx={{
+                                  position: 'absolute',
+                                  top: 8,
+                                  right: 8,
+                                  zIndex: 2,
+                                  bgcolor: 'background.paper',
+                                  boxShadow: 5,
+                                  '&:hover': { bgcolor: 'action.hover' }
+                                }}
+                              >
+                                <i className='bx-dots-vertical-rounded' />
+                              </IconButton>
+                            </Tooltip>
+                            <Menu
+                              keepMounted
+                              elevation={0}
+                              anchorEl={menuAnchor}
+                              id='customized-menu'
+                              onClose={handleMenuClose}
+                              open={Boolean(menuAnchor) && menuItemId === item.id}
+                              anchorOrigin={{
+                                vertical: 'bottom',
+                                horizontal: 'center'
                               }}
-                              sx={{
-                                position: 'absolute',
-                                top: 8,
-                                right: 8,
-                                zIndex: 2,
-                                bgcolor: 'background.paper',
-                                boxShadow: 5,
-                                '&:hover': { bgcolor: 'action.hover' }
+                              transformOrigin={{
+                                vertical: 'top',
+                                horizontal: 'center'
                               }}
                             >
-                              <EditIcon fontSize='small' />
-                            </IconButton>
-                          </Tooltip>
+                              <MenuItem
+                                onClick={() => {
+                                  handleEditClick(item)
+                                  handleMenuClose()
+                                }}
+                              >
+                                <ListItemIcon>
+                                  <i className='bx-edit text-xl' />
+                                </ListItemIcon>
+                                <ListItemText primary='Edit' />
+                              </MenuItem>
+                              <MenuItem
+                                disabled={deleting}
+                                onClick={async e => {
+                                  e.stopPropagation()
+                                  await handleDeleteSingle(item.id) // ← ยิง API
+                                  handleMenuClose() // ← ปิดเมนู
+                                }}
+                              >
+                                <ListItemIcon>
+                                  <i className='bx-trash text-xl' />
+                                </ListItemIcon>
+                                <ListItemText primary={deleting ? 'Deleting...' : 'Delete'} />
+                              </MenuItem>
+                            </Menu>
+                          </>
                         ) : null}
 
                         {/* Thumbnail / Video */}
@@ -645,6 +861,22 @@ export default function MediaPage() {
                       </Card>
                     </Grid>
                   ))}
+                  {totalPages > 1 && (
+                    <Grid item xs={12}>
+                      <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 2, flexWrap: 'wrap' }}>
+                        <Pagination
+                          shape='rounded'
+                          color='primary'
+                          variant='tonal'
+                          count={totalPages}
+                          page={page}
+                          onChange={(_, p) => setPage(p)}
+                          showFirstButton
+                          showLastButton
+                        />
+                      </Box>
+                    </Grid>
+                  )}
                 </Grid>
               )}
             </CardContent>
@@ -794,16 +1026,16 @@ export default function MediaPage() {
                     variant='standard'
                   />
                 </Grid>
-
                 <Grid item xs={12}>
-                  <TextField
+                  <CustomTextField
                     fullWidth
-                    rows={4}
-                    multiline
+                    autoComplete='off'
                     label='Description'
-                    variant='outlined'
                     value={editDescription}
                     onChange={e => setEditDescription(e.target.value)}
+                    variant='standard'
+                    multiline
+                    minRows={3}
                   />
                 </Grid>
               </Grid>

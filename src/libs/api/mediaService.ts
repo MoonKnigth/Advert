@@ -1,4 +1,6 @@
 // lib/mediaService.ts
+import { API_BASE } from '../../libs/apiConfig'
+
 export interface RawMediaItem {
     id: number
     title: string
@@ -11,7 +13,7 @@ export interface RawMediaItem {
 }
 
 export async function fetchMedia(): Promise<RawMediaItem[]> {
-    const res = await fetch('http://signboard.softacular.net/api/media')
+    const res = await fetch(`${API_BASE}/api/media`)
     const result = await res.json()
 
     if (result.success && Array.isArray(result.data?.media)) {

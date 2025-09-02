@@ -1,8 +1,9 @@
+// src/app/api/auth/media/[id]/route.ts
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server'
 
-// ใช้ env ได้: MEDIA_API_BASE=https://signboard.softacular.net/api
-const API_BASE = process.env.MEDIA_API_BASE ?? 'https://signboard.softacular.net/api'
+
+import { API_BASE } from '../../../../../libs/apiConfig'
 
 // ลด latency/cold start
 export const runtime = 'edge'
@@ -46,7 +47,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
         )
     }
 
-    const upstream = await fetch(`${API_BASE}/media/${id}`, {
+    const upstream = await fetch(`${API_BASE}/api/media/${id}`, {
         method: 'PUT',
         headers: {
             'Content-Type': 'application/json',
@@ -69,4 +70,51 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
         data ?? { success: upstream.ok, message: upstream.statusText, data: null },
         { status: upstream.status }
     )
+}
+
+export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+    const { id } = await params
+
+    if (!id) {
+        return NextResponse.json({ success: false, message: 'Missing media id', data: null }, { status: 400 })
+    }
+
+    // ดึง token จาก header ก่อน ถ้าไม่มีค่อยลองจาก cookie
+    const headerAuth = req.headers.get('authorization')
+    const cookieToken = req.cookies.get('accessToken')?.value
+    const authHeader = headerAuth || (cookieToken ? `Bearer ${cookieToken}` : '')
+
+    if (!authHeader) {
+        return NextResponse.json({ success: false, message: 'Unauthorized', data: null }, { status: 401 })
+    }
+
+    const upstream = await fetch(`${API_BASE}/api/media/${id}`, {
+        method: 'DELETE',
+        headers: {
+            Accept: 'application/json',
+            Authorization: authHeader
+        },
+        cache: 'no-store'
+    })
+
+    // ถ้า upstream ส่ง 204 ไม่มีเนื้อหา ให้ส่งต่อสถานะเฉยๆ
+    if (upstream.status === 204) {
+        return new NextResponse(null, { status: 204 })
+    }
+
+    // พยายาม parse JSON ถ้าไม่ได้ก็ส่งเป็น text/plain
+    try {
+        const data = await upstream.json()
+
+
+        return NextResponse.json(data, { status: upstream.status })
+    } catch {
+        const text = await upstream.text().catch(() => '')
+
+
+        return new NextResponse(text, {
+            status: upstream.status,
+            headers: { 'Content-Type': 'text/plain; charset=utf-8' }
+        })
+    }
 }

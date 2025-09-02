@@ -106,18 +106,6 @@ const normalizeMedia = (m: any) => {
   }
 }
 
-// type MediaItem = {
-//   id: number
-//   title: string
-//   type: string
-//   fileUrl: string | null
-//   thumbnailUrl: string | null
-//   duration: number | null
-//   fileSize: number | null
-//   status: number | null
-//   aspectRatio: string | null
-// }
-
 type UploadedFile = {
   file: File
   name: string
@@ -129,10 +117,6 @@ type UploadedFile = {
 // Add proper type definitions for API responses
 interface ApiResponse<T = any> {
   data?: T
-}
-
-interface DeviceApiResponse extends ApiResponse {
-  data?: any[]
 }
 
 interface ScheduleApiResponse extends ApiResponse {
@@ -168,6 +152,8 @@ const Step = styled(MuiStep)<StepProps>({
     color: 'var(--mui-palette-text-secondary)'
   }
 })
+
+// ---- SCHEDULE HELPERS ----
 
 const PropertyListingWizard = () => {
   const [activeStep, setActiveStep] = useState<number>(0)
@@ -208,18 +194,17 @@ const PropertyListingWizard = () => {
 
   const [startDateTime, setStartDateTime] = useState<Date | null>(getRoundedTime())
 
-  // const [startDateTime, setStartDateTime] = useState<Date | null>(new Date())
   const [endDateTime, setEndDateTime] = useState<Date | null>(null)
 
   const [oldFiles, setOldFiles] = useState<MediaItem[]>([])
   const [selected, setSelected] = useState<number[]>([])
+  const [selectedOldFiles, setSelectedOldFiles] = useState<MediaItem[]>([])
 
   // ✅ เพิ่ม state สำหรับข้อมูลที่ต้องส่งระหว่าง components
   const [adName, setAdName] = useState<string>('')
   const [adDescription, setAdDescription] = useState<string>('')
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([])
   const [deviceInfo, setDeviceInfo] = useState<any[]>([])
-  const selectedOldFiles = oldFiles.filter(file => selected.includes(file.id))
   const [mediaList, setMediaList] = useState<any[]>([])
   const [scheduleList, setScheduleList] = useState<any[]>([])
   const [selectedDeviceIds, setSelectedDeviceIds] = useState<string[]>([])
@@ -243,42 +228,69 @@ const PropertyListingWizard = () => {
     }
   }
 
-  const fetchScheduleAssignments = async () => {
-    try {
-      const accessToken = Cookies.get('accessToken')
+  // ✅ ให้รองรับทั้ง data.devices, data, และ payload.devices
+  const extractDevicesArray = (payload: any) => {
+    if (!payload) return []
+    const d = (payload as any).data
 
-      if (!accessToken) {
-        console.error('Access token is missing!')
+    if (Array.isArray(d?.devices)) return d.devices
+    if (Array.isArray(d)) return d
+    if (Array.isArray((payload as any).devices)) return (payload as any).devices
 
-        return
-      }
-
-      const res = await fetch('/api/auth/device', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          'Content-Type': 'application/json'
-        }
-      })
-
-      const text = await res.text()
-
-      if (res.ok) {
-        try {
-          const data = JSON.parse(text) as DeviceApiResponse
-
-          setDeviceInfo(data.data || [])
-          console.log('Parsed Data:', data)
-        } catch (e) {
-          console.error('Failed to parse JSON:', e)
-        }
-      } else {
-        console.error('Error fetching API:', text)
-      }
-    } catch (error) {
-      console.error('Unexpected error:', error)
-    }
+    return []
   }
+
+  // ✅ ใช้โครงสร้างเดียวกับ UI (today = 1 รายการ, coming = array)
+  const normalizeSchedule = (s: any) => ({
+    schedule_id: s?.schedule_id ?? s?.id ?? s?.scheduleId ?? null,
+    schedule_name: s?.schedule_name ?? s?.name ?? '',
+    schedule_number: s?.schedule_number ?? s?.number ?? s?.code ?? '',
+    run_at: s?.run_at ?? s?.runAt ?? null,
+    run_at_to: s?.run_at_to ?? s?.runAtTo ?? null
+  })
+
+  // ปรับ type ให้รองรับทั้ง 2 โครงสร้าง
+  interface DeviceApiResponse extends ApiResponse {
+    data?: any[] | { devices?: any[]; [k: string]: any }
+  }
+
+  // const fetchScheduleAssignments = async () => {
+  //   try {
+  //     const accessToken = Cookies.get('accessToken')
+
+  //     if (!accessToken) {
+  //       console.error('Access token is missing!')
+
+  //       return
+  //     }
+
+  //     const res = await fetch('/api/auth/device', {
+  //       method: 'POST',
+  //       headers: {
+  //         Authorization: `Bearer ${accessToken}`,
+  //         'Content-Type': 'application/json'
+  //       }
+  //     })
+
+  //     const text = await res.text()
+
+  //     if (res.ok) {
+  //       try {
+  //         const data = JSON.parse(text) as DeviceApiResponse
+  //         const devices = extractDevicesArray(data)
+
+  //         setDeviceInfo(devices)
+  //         console.log('Parsed Devices:', devices.length, devices.slice(0, 2))
+  //       } catch (e) {
+  //         console.error('Failed to parse JSON:', e)
+  //       }
+  //     } else {
+  //       console.error('Error fetching API:', text)
+  //     }
+  //   } catch (error) {
+  //     console.error('Unexpected error:', error)
+  //   }
+  // }
 
   // เมื่อ start เปลี่ยน ให้ตั้ง end ขั้นต่ำ = start + 15 นาที
   useEffect(() => {
@@ -327,7 +339,6 @@ const PropertyListingWizard = () => {
       let scheduleListData: ScheduleListApiResponse = { data: { data: [] } }
 
       // 👇 เพิ่มตัวแปรให้มี scope ภายนอก try ภายในย่อย
-      let schedulesArr: any[] = []
 
       // devices
       try {
@@ -348,7 +359,7 @@ const PropertyListingWizard = () => {
         mediaData = await fetchJSON<MediaApiResponse>('/api/auth/media', 'GET')
         const parsed = extractMediaArray(mediaData).map(normalizeMedia)
 
-        console.log('[Wizard] parsed media:', parsed.length, parsed.slice(0, 3))
+        console.log('[Wizard] parsed media:', parsed.length, parsed)
         setMediaList(parsed)
       } catch (err) {
         console.warn('Media data fetch failed:', err)
@@ -357,40 +368,68 @@ const PropertyListingWizard = () => {
 
       // schedules list (อีก endpoint)
       try {
-        scheduleListData = await fetchJSON<ScheduleListApiResponse>('/api/proxy/schedules', 'GET')
-        schedulesArr = Array.isArray((scheduleListData as any)?.data)
-          ? (scheduleListData as any).data
-          : Array.isArray((scheduleListData as any)?.data?.data)
-            ? (scheduleListData as any).data.data
-            : []
-        console.log('📋 Processing schedules:', schedulesArr)
+        scheduleListData = await fetchJSON<ScheduleListApiResponse>('/api/proxy/schedules?page=0&size=10', 'GET')
+
+        // ✅ โครงสร้างใหม่: { success, data: { schedules: [...] } }
+        const raw = (scheduleListData as any)?.data?.schedules ?? []
+
+        const schedulesArr = Array.isArray(raw)
+          ? raw.map((s: any) => ({
+              ...s,
+
+              // map ให้ DataTable ใช้ได้เสมอ
+              schedule_id: s.schedule_id ?? s.id ?? null,
+              schedule_name: s.name ?? s.title ?? '',
+              schedule_number: s.scheduleNumber ?? s.number ?? s.code ?? '',
+              run_at: s.runAt ?? s.run_at ?? null,
+              run_at_to: s.runAtTo ?? s.run_at_to ?? null
+            }))
+          : []
+
+        console.log('📋 [/api/proxy/schedules] count:', schedulesArr.length, schedulesArr)
+
+        // ✅ ตั้ง state ให้ StepPersonalDetails รับได้แล้ว
+        setScheduleList(schedulesArr)
       } catch (err) {
         console.warn('Schedule list fetch failed:', err)
-        schedulesArr = []
+        setScheduleList([])
       }
 
-      // สร้าง map สำหรับ schedules_today / schedules_coming แล้ว merge กับ device
-      const scheduleTodayMap = new Map<string, any>()
+      // ⬇️ สร้าง map: device_id -> today/coming (normalize ให้เรียบร้อย)
+      const schedulePerDeviceItems = extractDevicesArray(scheduleData)
 
+      const scheduleTodayMap = new Map<string, any | null>()
       const scheduleComingMap = new Map<string, any[]>()
 
-      ;(Array.isArray((scheduleData as any)?.data) ? (scheduleData as any).data : []).forEach((item: any) => {
-        const devId = item.device_id || item.deviceId
+      for (const item of schedulePerDeviceItems) {
+        const devKey = String(item.device_id ?? item.deviceId ?? item.id ?? item.device?.id ?? '').trim()
 
-        if (!devId) return
-        scheduleTodayMap.set(devId, item.schedules_today ?? item.schedulesToday ?? null)
-        scheduleComingMap.set(devId, item.schedules_coming ?? item.schedulesComing ?? [])
+        if (!devKey) continue
+
+        const rawToday = Array.isArray(item.schedules_today)
+          ? (item.schedules_today[0] ?? null)
+          : (item.schedules_today ?? item.schedulesToday ?? null)
+
+        const rawComing = (item.schedules_coming ?? item.schedulesComing ?? []) as any[]
+
+        scheduleTodayMap.set(devKey, rawToday ? normalizeSchedule(rawToday) : null)
+        scheduleComingMap.set(devKey, rawComing.map(normalizeSchedule))
+      }
+
+      // ✅ รวมเข้า devices หลัก
+      const devicesArr = extractDevicesArray(deviceData)
+
+      const mergedDevices = devicesArr.map((device: any) => {
+        const key = String(device.device_id ?? device.deviceId ?? device.id ?? '').trim()
+
+        return {
+          ...device,
+          schedules_today: scheduleTodayMap.get(key) ?? null,
+          schedules_coming: scheduleComingMap.get(key) ?? []
+        }
       })
 
-      const mergedDevices = (deviceData.data || []).map((device: any) => ({
-        ...device,
-        schedules_today: scheduleTodayMap.get(device.device_id) || null,
-        schedules_coming: scheduleComingMap.get(device.device_id) || []
-      }))
-
       setDeviceInfo(mergedDevices)
-
-      // setScheduleList(schedulesWithDetails.length ? schedulesWithDetails : schedulesArr)
     } catch (err) {
       console.error('Error loading data:', err)
       setDeviceInfo([])
@@ -413,7 +452,7 @@ const PropertyListingWizard = () => {
             endDateTime={endDateTime}
             setEndDateTime={setEndDateTime}
             deviceInfo={deviceInfo}
-            fetchDeviceInfo={fetchScheduleAssignments}
+            fetchDeviceInfo={fetchData}
             mediaList={mediaList}
             scheduleList={scheduleList}
             selectedDeviceIds={selectedDeviceIds}
@@ -430,6 +469,7 @@ const PropertyListingWizard = () => {
             onOrientationChange={setSelectedOrientation} // ✅ ส่งฟังก์ชันอัปเดต
             isInternalEdit
             selectedOldFiles={selectedOldFiles}
+            setSelectedOldFiles={setSelectedOldFiles}
             oldFiles={oldFiles}
             setOldFiles={setOldFiles}
             selected={selected}
@@ -453,6 +493,7 @@ const PropertyListingWizard = () => {
             orientation={selectedOrientation} // ✅ ใช้ selectedOrientation จาก main state
             isInternal
             selectedOldFiles={selectedOldFiles}
+            setSelectedOldFiles={setSelectedOldFiles}
             adName={adName}
             adDescription={adDescription}
             uploadedFiles={uploadedFiles}

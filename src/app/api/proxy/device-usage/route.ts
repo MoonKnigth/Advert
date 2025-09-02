@@ -2,6 +2,8 @@ import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server'
 
 export const runtime = 'nodejs'
+import { API_BASE } from '../../../../libs/apiConfig'
+
 
 // Interface for the expected response from the external API
 interface DeviceUsageResponse {
@@ -36,7 +38,7 @@ export async function GET(req: NextRequest) {
 
         console.log('Making request to external API with token:', token.substring(0, 10) + '...')
 
-        const response = await fetch('https://signboard.softacular.net/api/info/device-usage', {
+        const response = await fetch(`${API_BASE}/api/info/device-usage`, {
             method: 'GET',
             headers: {
                 'Authorization': `Bearer ${token}`,

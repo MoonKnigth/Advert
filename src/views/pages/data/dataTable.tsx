@@ -3,6 +3,12 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 
+import dynamic from 'next/dynamic'
+
+const EditSchedules = dynamic(() => import('./editSchedules').then(m => m.EditSchedules), { ssr: false })
+
+const EditSchedulesUpdate = dynamic(() => import('./editSchedulesUpdate').then(m => m.default), { ssr: false })
+
 // MUI
 import MuiCard from '@mui/material/Card'
 import { styled } from '@mui/material/styles'
@@ -46,6 +52,8 @@ import type { RankingInfo } from '@tanstack/match-sorter-utils'
 
 // Styles
 import Cookies from 'js-cookie'
+
+// import type { EditSchedulesSubmitPayload } from '../../../libs/mediaTypes'
 
 import styles from '@core/styles/table.module.css'
 import ChevronRight from '@menu/svg/ChevronRight'
@@ -114,6 +122,19 @@ declare module '@tanstack/table-core' {
   }
 }
 
+// type MediaItem = {
+//   id: number
+//   title: string
+//   type: 'video' | 'image'
+//   fileUrl: string | null
+//   thumbnailUrl: string | null
+//   duration: number | null
+//   fileSize: number | null
+//   aspectRatio: string | null
+//   description: string
+//   status: number | null
+// }
+
 const fuzzyFilter: FilterFn<any> = (row, columnId, value, addMeta) => {
   const itemRank = rankItem(row.getValue(columnId), value)
 
@@ -134,10 +155,110 @@ const DataTable: React.FC = () => {
   const [loadingTable, setLoadingTable] = useState<boolean>(true)
   const [openPreviewDialog, setOpenPreviewDialog] = useState(false)
   const [previewDialogOpen, setPreviewDialogOpen] = useState(false)
-  const [deviceUsed, setDeviceUsed] = useState<number>(0)
-  const [maxDeviceUsed, setMaxDeviceUsed] = useState<number>(0)
-  const [isLoading, setIsLoading] = useState<boolean>(true)
+
   const [scheduleList, setScheduleList] = useState<any[]>([])
+  const [editRow, setEditRow] = useState<RowType | null>(null)
+
+  // server-side pagination states
+  const [currentPage, setCurrentPage] = useState<number>(1) // UI page (เริ่มที่ 1)
+  const [totalPages, setTotalPages] = useState<number>(1)
+  const [totalElements, setTotalElements] = useState<number>(0)
+
+  // ✅ summary totals (นับจาก "ทั้งหมด" ไม่ใช่เฉพาะหน้าปัจจุบัน)
+  const [summary, setSummary] = useState({ total: 0, playing: 0, upcoming: 0, expired: 0 })
+  const [summaryLoading, setSummaryLoading] = useState(false)
+
+  const openEdit = (row: RowType) => {
+    setEditRow(row)
+    setWizardStep(0) // ✅ เริ่มที่สเต็ป 0 เสมอ
+    setWizardData(null) // ✅ เคลียร์ข้อมูลค้าง
+    setPreviewDialogOpen(true)
+  }
+
+  const closeEditDialog = () => {
+    setPreviewDialogOpen(false)
+    setWizardStep(0) // ✅ รีเซ็ต
+    setWizardData(null)
+  }
+
+  // ✅ เพิ่ม state สำหรับ wizard
+  const [wizardStep, setWizardStep] = useState<0 | 1>(0)
+
+  const [wizardData, setWizardData] = useState<{
+    scheduleId: number
+    orientation: 'landscape' | 'portrait'
+    selectedOldFiles: any[] // MediaItem[]
+    uploadedFiles: any[] // UploadedFile[]
+    adName: string
+    adDescription: string
+    startAt: string
+    endAt: string
+  } | null>(null)
+
+  async function fetchSummaryTotals(totalExpected?: number) {
+    try {
+      setSummaryLoading(true)
+
+      const token = Cookies.get('accessToken')
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+
+      if (token) headers.Authorization = `Bearer ${token}`
+
+      // 1) ยิงหน้าแรก (page=0) พร้อมขอ size ใหญ่หน่อย (แต่สุดท้ายใช้ "effective size" ที่เซิร์ฟเวอร์ตอบกลับ)
+      const probeSize = Math.max(10, Math.min(Number(totalExpected) || 100, 1000))
+      const res0 = await fetch(`/api/proxy/schedules?page=0&size=${probeSize}`, { method: 'GET', headers })
+      const text0 = await res0.text()
+
+      if (!res0.ok) throw new Error(`HTTP ${res0.status}: ${text0}`)
+      const json0 = JSON.parse(text0)
+
+      const total = Number(json0?.data?.total_elements ?? 0)
+      const effectiveSize = Math.max(1, Number(json0?.data?.size ?? probeSize)) // ขนาดที่เซิร์ฟเวอร์ยอมรับจริง
+      const totalPages = Math.max(1, Number(json0?.data?.total_pages ?? Math.ceil(total / effectiveSize)))
+
+      let playing = 0,
+        upcoming = 0,
+        expired = 0
+
+      // นับจากหน้า 0
+      const arr0 = extractSchedulesArray(json0)
+      const rows0 = mapSchedulesToRows(arr0, 0)
+
+      for (const r of rows0) {
+        const s = getRowStatus(r)
+
+        if (s === 'กำลังฉาย') playing++
+        else if (s === 'ยังไม่เริ่ม') upcoming++
+        else expired++
+      }
+
+      // 2) วนดึงหน้าที่เหลือ (1..totalPages-1) แล้วสะสมผล
+      for (let p = 1; p < totalPages; p++) {
+        const resp = await fetch(`/api/proxy/schedules?page=${p}&size=${effectiveSize}`, { method: 'GET', headers })
+        const txt = await resp.text()
+
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${txt}`)
+        const js = JSON.parse(txt)
+        const arr = extractSchedulesArray(js)
+        const rows = mapSchedulesToRows(arr, p * effectiveSize)
+
+        for (const r of rows) {
+          const s = getRowStatus(r)
+
+          if (s === 'กำลังฉาย') playing++
+          else if (s === 'ยังไม่เริ่ม') upcoming++
+          else expired++
+        }
+      }
+
+      // สรุปสุดท้าย = ทั้งระบบ
+      setSummary({ total, playing, upcoming, expired })
+    } catch (e) {
+      console.warn('Summary totals failed:', e)
+    } finally {
+      setSummaryLoading(false)
+    }
+  }
 
   // === เพิ่ม helper สำหรับ merge orientation จาก scheduleList → rows ===
   function mergeOrientation(rows: RowType[], schedules: any[]): RowType[] {
@@ -166,11 +287,14 @@ const DataTable: React.FC = () => {
   }
 
   // ===== (2) ฟังก์ชัน fetch + parse ที่ทน response หลายรูปแบบ =====
-  const fetchScheduleList = async () => {
+  const fetchScheduleList = async (page = currentPage, size = rowsPerPage) => {
     try {
       const token = Cookies.get('accessToken')
 
-      const res = await fetch('/api/proxy/schedules', {
+      // ✅ UI page (1-based) → API page (0-based)
+      const backendPage = Math.max(0, page - 1)
+
+      const res = await fetch(`/api/proxy/schedules?page=${backendPage}&size=${size}`, {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
@@ -183,90 +307,93 @@ const DataTable: React.FC = () => {
       if (!res.ok) throw new Error(`HTTP ${res.status}: ${text}`)
 
       if (!text.trim()) {
-        console.warn('[schedules] empty response')
         setScheduleList([])
+        setBaseData([])
+        setData([])
+        setCurrentPage(1)
+        setTotalPages(1)
+        setTotalElements(0)
 
         return
       }
 
       const json = JSON.parse(text)
 
-      // รองรับได้ทั้ง {data: [...]}, {data:{data:[...]}}, หรือ [] ตรง ๆ
-      const arr = Array.isArray(json?.data)
-        ? json.data
-        : Array.isArray(json?.data?.data)
-          ? json.data.data
-          : Array.isArray(json)
-            ? json
-            : []
+      // ✅ schedules array
+      const arr = extractSchedulesArray(json)
+
+      // ✅ meta (page ที่ API คืนมา = 0-based)
+      const metaPage = Number(json?.data?.page ?? backendPage) // 0-based
+      const metaSize = Number(json?.data?.size ?? size)
+      const metaPages = Number(json?.data?.total_pages ?? 1)
+      const metaTotal = Number(json?.data?.total_elements ?? arr.length)
+
+      setTotalPages(metaPages)
+      setTotalElements(metaTotal)
+      await fetchSummaryTotals(metaTotal)
+
+      // ✅ แสดงใน UI เป็น 1-based
+      setCurrentPage(metaPage + 1)
 
       setScheduleList(arr)
 
-      // 👇 log array ออกมา
-      console.log('📋 [/api/proxy/schedules] array:', arr)
-      console.log('📋 จำนวนรายการ:', arr.length)
-      console.log('📋 ตัวอย่าง 3 แรก:', arr.slice(0, 3))
+      // ✅ offset = metaPage * metaSize (เพราะ metaPage เป็น 0-based)
+      const offset = metaPage * metaSize
+      const rows = mapSchedulesToRows(arr, offset)
+
+      setBaseData(rows)
+      setData(rows)
+
+      console.log('📋 [/api/proxy/schedules] count:', arr.length, {
+        page_ui: metaPage + 1,
+        page_api: metaPage,
+        size: metaSize,
+        total_pages: metaPages
+      })
     } catch (err) {
       console.warn('Schedule list fetch failed:', err)
       setScheduleList([])
+      setBaseData([])
+      setData([])
+      setCurrentPage(1)
+      setTotalPages(1)
+      setTotalElements(0)
     }
+  }
+
+  const onFinishUpdate = () => {
+    setPreviewDialogOpen(false)
+    setWizardStep(0)
+    setWizardData(null)
+
+    // รีเฟรชข้อมูลตาราง
+    fetchScheduleList()
   }
 
   // data
   const [baseData, setBaseData] = useState<RowType[]>([])
   const [data, setData] = useState<RowType[]>([])
 
-  // ---- counters derived from current table rows ----
-  const { playingCount, upcomingCount, expiredCount } = useMemo(() => {
-    let playing = 0
-    let upcoming = 0
-    let expired = 0
-    const now = Date.now()
-
-    const toTs = (s?: string) => {
-      if (!s) return NaN
-
-      // รองรับ "YYYY-MM-DD HH:mm:ss" และ ISO
-      const normalized = s.includes('T') ? s : s.replace(' ', 'T')
-      const t = Date.parse(normalized)
-
-      return Number.isNaN(t) ? Date.parse(normalized + 'Z') : t
-    }
-
-    for (const r of data) {
-      // ถ้าแถวมี status มาแล้ว ให้นับตามนั้นก่อน
-      if (r.status === 'กำลังฉาย') {
-        playing++
-        continue
-      }
-
-      if (r.status === 'ยังไม่เริ่ม') {
-        upcoming++
-        continue
-      }
-
-      if (r.status === 'หมดอายุ') {
-        expired++
-        continue
-      }
-
-      // ไม่งั้นคำนวณจากเวลาเริ่ม/สิ้นสุด
-      const st = toTs(r.start_date)
-      const et = toTs(r.end_date)
-
-      if (!Number.isNaN(st) && !Number.isNaN(et)) {
-        if (now < st) upcoming++
-        else if (now > et) expired++
-        else playing++
-      }
-    }
-
-    return { playingCount: playing, upcomingCount: upcoming, expiredCount: expired }
-  }, [data])
-
   // ฟิวส์กันยิงซ้ำจาก StrictMode ใน dev
   const didFetch = useRef(false)
   const [isClient, setIsClient] = useState<boolean>(false)
+
+  // แปลง payload จาก /api/proxy/schedules ให้กลายเป็น RowType ของตาราง
+  // แปลง payload จาก /api/proxy/schedules ให้กลายเป็น RowType ของตาราง
+  function mapSchedulesToRows(arr: any[], offset = 0): RowType[] {
+    return (arr || [])
+      .map((s: any, idx: number) => ({
+        id: offset + idx + 1, // ลำดับที่โชว์ในตาราง
+        schedule_id: Number(s?.id ?? s?.schedule_id ?? s?.scheduleId),
+        name: s?.name ?? s?.scheduleName ?? '-',
+        campaing_code: s?.scheduleNumber ?? '-',
+        start_date: s?.runAt ?? s?.start_time ?? '',
+        end_date: s?.runAtTo ?? s?.end_time ?? '',
+        direction: String(s?.playOrientation ?? '').toUpperCase() === 'VERTICAL' ? VERTICAL_CONST : HORIZONTAL_CONST,
+        status: ''
+      }))
+      .filter(r => !Number.isNaN(r.schedule_id))
+  }
 
   // Handle client-side hydration
   useEffect(() => {
@@ -277,36 +404,41 @@ const DataTable: React.FC = () => {
   useEffect(() => {
     if (didFetch.current) return
     didFetch.current = true
-
-    const fetchData = async () => {
-      try {
-        setLoadingTable(true)
-
-        const res = await fetch('/api/auth/schedule-assignments', { cache: 'no-store' })
-        const json = await res.json()
-
-        console.log('[schedule-assignments] raw payload:', json)
-
-        const rows: RowType[] = Array.isArray(json?.data) ? json.data : []
-
-        console.log('[schedule-assignments] rows:', rows)
-
-        setBaseData(rows)
-        setData(rows)
-      } catch (e) {
-        console.error('[schedule-assignments] fetch error:', e)
-        setBaseData([])
-        setData([])
-      } finally {
-        setLoadingTable(false)
-      }
-    }
-
-    // 🔹 เรียกทั้งสองอย่าง
+    // eslint-disable-next-line padding-line-between-statements
     ;(async () => {
-      await Promise.all([fetchData(), fetchScheduleList()])
+      setLoadingTable(true)
+      await fetchScheduleList(1, rowsPerPage) // UI=1 -> API=0
+      setLoadingTable(false)
     })()
   }, [])
+
+  // แปลงสตริงวันเป็น timestamp โดยถ้าไม่มีเวลา:
+  //   - start ใช้ 00:00:00
+  //   - end   ใช้ 23:59:59
+  function toTsBounded(s?: string, bound: 'start' | 'end' = 'start') {
+    if (!s) return NaN
+    if (s.includes('T')) return Date.parse(s) // มีเวลาอยู่แล้ว
+    const withTime = bound === 'end' ? `${s}T23:59:59` : `${s}T00:00:00`
+    const t = Date.parse(withTime)
+
+    return Number.isNaN(t) ? Date.parse(withTime + 'Z') : t
+  }
+
+  function getRowStatus(row: RowType): 'กำลังฉาย' | 'ยังไม่เริ่ม' | 'หมดอายุ' {
+    const now = Date.now()
+    const st = toTsBounded(row.start_date, 'start')
+    const et = toTsBounded(row.end_date, 'end')
+
+    if (!Number.isNaN(st) && !Number.isNaN(et)) {
+      if (now < st) return 'ยังไม่เริ่ม'
+      if (now > et) return 'หมดอายุ'
+
+      return 'กำลังฉาย'
+    }
+
+    // fallback
+    return (row.status as any) || 'ยังไม่เริ่ม'
+  }
 
   // ===== columns =====
   const columns = useMemo<ColumnDef<RowType, any>[]>(() => {
@@ -342,40 +474,49 @@ const DataTable: React.FC = () => {
             </div>
           )
         },
-        header: 'DIRECTION'
+        header: 'DIRECTION',
+        enableSorting: false
       }),
       columnHelper.accessor('status', {
         cell: info => {
-          const status = info.getValue() as string
+          const row = info.row.original
+          const status = getRowStatus(row)
 
-          return <Chip label={status} color={status === 'กำลังฉาย' ? 'success' : 'warning'} variant='tonal' />
+          const color = status === 'กำลังฉาย' ? 'success' : status === 'ยังไม่เริ่ม' ? 'warning' : 'info'
+
+          return <Chip label={status} color={color} variant='tonal' />
         },
-        header: 'STATUS'
+        header: 'STATUS',
+        enableSorting: false
       }),
       columnHelper.accessor('actions', {
-        cell: () => (
-          <div className='flex justify-around'>
-            <CustomIconButton
-              aria-label='view details'
-              color='info'
-              variant='tonal'
-              onClick={() => setOpenPreviewDialog(true)}
-            >
-              <i className='bx-show' />
-            </CustomIconButton>
-            <CustomIconButton
-              aria-label='edit campaign'
-              color='warning'
-              variant='tonal'
-              onClick={() => setPreviewDialogOpen(true)}
-            >
-              <i className='bx-edit' />
-            </CustomIconButton>
-            <CustomIconButton aria-label='delete campaign' color='error' variant='tonal'>
-              <i className='bx-trash' />
-            </CustomIconButton>
-          </div>
-        ),
+        cell: info => {
+          const row = info.row.original
+
+          return (
+            <div className='flex justify-around gap-2'>
+              <CustomIconButton
+                aria-label='view details'
+                color='info'
+                variant='tonal'
+                onClick={() => setOpenPreviewDialog(true)}
+              >
+                <i className='bx-show' />
+              </CustomIconButton>
+              <CustomIconButton
+                aria-label='edit campaign'
+                color='warning'
+                variant='tonal'
+                onClick={() => openEdit(row)}
+              >
+                <i className='bx-edit' />
+              </CustomIconButton>
+              <CustomIconButton aria-label='delete campaign' color='error' variant='tonal'>
+                <i className='bx-trash' />
+              </CustomIconButton>
+            </div>
+          )
+        },
         header: 'ACTIONS',
         enableSorting: false
       })
@@ -431,18 +572,25 @@ const DataTable: React.FC = () => {
     table.setPageIndex(0)
   }
 
+  // ✅ ดึง array ตารางงานจาก payload รองรับหลายทรง
+  const extractSchedulesArray = (json: any): any[] => {
+    if (!json) return []
+    const d = json.data
+
+    if (Array.isArray(d?.schedules)) return d.schedules // <-- เคสจริงของ /api/proxy/schedules
+    if (Array.isArray(d)) return d
+    if (Array.isArray(d?.data)) return d.data
+
+    return []
+  }
+
   // Fetch device usage data
   const fetchDeviceUsage = async () => {
     try {
-      setIsLoading(true)
       const accessToken = Cookies.get('accessToken')
 
       if (!accessToken) {
         console.error('Access token not found')
-
-        // Set default values when no token
-        setDeviceUsed(0)
-        setMaxDeviceUsed(0)
 
         return
       }
@@ -464,23 +612,16 @@ const DataTable: React.FC = () => {
       console.log('Device usage response:', result)
 
       if (result.success && result.data) {
-        setDeviceUsed(result.data.device_used || 0)
-        setMaxDeviceUsed(result.data.max_devices || 0)
       } else {
         console.warn('Fetch failed:', result.message)
 
         // Set fallback values
-        setDeviceUsed(0)
-        setMaxDeviceUsed(0)
       }
     } catch (error) {
       console.error('API error:', error)
 
       // Set fallback values on error
-      setDeviceUsed(0)
-      setMaxDeviceUsed(0)
     } finally {
-      setIsLoading(false)
     }
   }
 
@@ -511,12 +652,10 @@ const DataTable: React.FC = () => {
                 <CustomAvatar color={'error'} variant='rounded' size={40}>
                   <Icon icon='meteor-icons:tv' color='white' width={22} />
                 </CustomAvatar>
-                <Typography variant='h4'>
-                  {isLoading ? <CircularProgress size={20} /> : `${deviceUsed} / ${maxDeviceUsed}`}
-                </Typography>
+                <Typography variant='h4'>{summaryLoading ? '—' : summary.total}</Typography>
               </div>
               <div className='flex flex-col gap-2'>
-                <Typography>{'TV ทั้งหมด'}</Typography>
+                <Typography>{'ทั้งหมด'}</Typography>
               </div>
             </CardContent>
           </Card>
@@ -528,7 +667,7 @@ const DataTable: React.FC = () => {
                 <CustomAvatar color={'success'} variant='rounded' size={40}>
                   <Icon icon='material-symbols:connected-tv-outline' color='white' width={22} />
                 </CustomAvatar>
-                <Typography variant='h4'>{playingCount}</Typography>
+                <Typography variant='h4'>{summaryLoading ? '—' : summary.playing}</Typography>
               </div>
               <div className='flex flex-col gap-2'>
                 <Typography>{'กำลังฉาย'}</Typography>
@@ -543,7 +682,7 @@ const DataTable: React.FC = () => {
                 <CustomAvatar color={'warning'} variant='rounded' size={40}>
                   <Icon icon='mdi:timer-sand' color='white' width={22} />
                 </CustomAvatar>
-                <Typography variant='h4'>{upcomingCount}</Typography>
+                <Typography variant='h4'>{summaryLoading ? '—' : summary.upcoming}</Typography>
               </div>
               <div className='flex flex-col gap-2'>
                 <Typography>{'ยังไม่เริ่ม'}</Typography>
@@ -558,7 +697,7 @@ const DataTable: React.FC = () => {
                 <CustomAvatar color={'info'} variant='rounded' size={40}>
                   <Icon icon='ph:calendar-x' color='white' width={22} />
                 </CustomAvatar>
-                <Typography variant='h4'>{expiredCount}</Typography>
+                <Typography variant='h4'>{summaryLoading ? '—' : summary.expired}</Typography>
               </div>
               <div className='flex flex-col gap-2'>
                 <Typography>{'หมดอายุ'}</Typography>
@@ -586,11 +725,14 @@ const DataTable: React.FC = () => {
           <CustomTextField
             select
             value={String(table.getState().pagination.pageSize)}
-            onChange={e => {
+            onChange={async e => {
               const rows = parseInt(e.target.value)
 
               setRowsPerPage(rows)
               table.setPageSize(rows)
+              setLoadingTable(true)
+              await fetchScheduleList(1, rows) // ⬅️ รีเฟรชจากหน้า 1 ด้วย size ใหม่
+              setLoadingTable(false)
             }}
             label='Rows per page'
             sx={{ minWidth: 120 }}
@@ -657,15 +799,21 @@ const DataTable: React.FC = () => {
             </table>
           </div>
         )}
-        <div className='flex justify-end items-center flex-wrap pli-6 border-bs bs-auto plb-[12.5px] gap-2'>
+        <div className='flex justify-end items-center flex-wrap pli-6 border-bs bs-auto plb-[12.5px] gap-3'>
+          <Typography variant='body2' color='text.secondary'>
+            ทั้งหมด {totalPages} หน้า · {totalElements} รายการ
+          </Typography>{' '}
           <Pagination
+            variant='tonal'
             shape='rounded'
             color='primary'
-            variant='tonal'
-            count={Math.ceil(table.getFilteredRowModel().rows.length / table.getState().pagination.pageSize)}
-            page={table.getState().pagination.pageIndex + 1}
-            onChange={(_, page) => {
-              table.setPageIndex(page - 1)
+            count={totalPages}
+            page={currentPage} // UI 1-based
+            onChange={async (_, page) => {
+              setLoadingTable(true)
+              table.setPageIndex(0)
+              await fetchScheduleList(page, rowsPerPage) // UI -> แปลงเป็น API ในฟังก์ชัน
+              setLoadingTable(false)
             }}
             showFirstButton
             showLastButton
@@ -687,23 +835,67 @@ const DataTable: React.FC = () => {
       </Dialog>
 
       {/* Edit Dialog */}
-      <Dialog open={previewDialogOpen} onClose={() => setPreviewDialogOpen(false)} maxWidth='md' fullWidth>
+      <Dialog open={previewDialogOpen} onClose={closeEditDialog} maxWidth='md' fullWidth>
         <DialogTitle>
           <Box display='flex' justifyContent='space-between' alignItems='center'>
-            <Typography variant='h6'>แก้ไข</Typography>
-            <IconButton onClick={() => setPreviewDialogOpen(false)}>
+            <Typography variant='h6'>แก้ไขกำหนดการ</Typography>
+            <IconButton onClick={closeEditDialog}>
               <Icon icon='material-symbols:close' />
             </IconButton>
           </Box>
         </DialogTitle>
-        <DialogContent>{/* ใส่ StepPropertyDetails ตามที่คุณใช้ได้ที่นี่ */}</DialogContent>
+
+        <DialogContent sx={{ pt: 0 }}>
+          {editRow && (
+            <>
+              {wizardStep === 0 ? (
+                <EditSchedules
+                  key={editRow.schedule_id}
+                  row={{
+                    name: editRow.name,
+                    schedule_id: editRow.schedule_id,
+                    direction: { style: editRow.direction?.style },
+                    start_date: editRow.start_date,
+                    end_date: editRow.end_date
+                  }}
+                  initialPayload={wizardData ?? undefined}
+                  onNext={payload => {
+                    setWizardData(prev => ({
+                      ...(prev ?? {}),
+                      ...payload
+                    }))
+                    setWizardStep(1)
+                  }}
+                />
+              ) : (
+                <EditSchedulesUpdate
+                  activeStep={1}
+                  handlePrev={() => setWizardStep(0)}
+                  steps={[
+                    { title: 'แก้ไขกำหนดการ', subtitle: '' },
+                    { title: 'ยืนยัน & มอบหมาย', subtitle: '' }
+                  ]}
+                  scheduleId={wizardData?.scheduleId as number}
+                  orientation={wizardData?.orientation || 'landscape'}
+                  selectedOldFiles={wizardData?.selectedOldFiles || []}
+                  adName={wizardData?.adName || ''}
+                  adDescription={wizardData?.adDescription || ''}
+                  uploadedFiles={wizardData?.uploadedFiles || []}
+                  setUploadedFiles={files =>
+                    setWizardData(prev => (prev ? { ...prev, uploadedFiles: files as any } : prev))
+                  }
+                  startDateTime={wizardData?.startAt ? new Date(wizardData.startAt) : null}
+                  endDateTime={wizardData?.endAt ? new Date(wizardData.endAt) : null}
+                  selectedDeviceIds={[]}
+                  handleNext={onFinishUpdate}
+                />
+              )}
+            </>
+          )}
+        </DialogContent>
       </Dialog>
     </div>
   )
 }
 
 export default DataTable
-
-// ===== utilities =====
-
-/** map payload → rows ของตารางตามเงื่อนไขที่กำหนด */

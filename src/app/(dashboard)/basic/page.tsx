@@ -36,7 +36,8 @@ const columns = [
   columnHelper.accessor('address', {
     cell: info => info.getValue(),
     header: 'address'
-  }),
+  })
+
   // columnHelper.accessor('age', {
   //   cell: info => info.getValue(),
   //   header: 'Age'
@@ -58,22 +59,23 @@ const BasicTable = () => {
           fullName: user.name,
           username: user.username,
           email: user.email,
-          address: user.address.street,
+          address: user.address.street
         }))
+
         setData(mappedData)
         setIsLoading(false)
       })
       .catch(error => {
         setError('Error fetching data')
         setIsLoading(false)
-        console.log(error);
+        console.log(error)
       })
   }, [])
 
   const table = useReactTable({
     data,
     columns, // Use the columns after they are defined
-    getCoreRowModel: getCoreRowModel(),
+    getCoreRowModel: getCoreRowModel()
   })
 
   if (isLoading) {

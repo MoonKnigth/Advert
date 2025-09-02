@@ -1,6 +1,9 @@
 // src/app/api/auth/logout/route.ts
 import { NextResponse } from 'next/server'
 
+import { API_BASE } from '../../../../libs/apiConfig'
+
+
 export async function POST(req: Request) {
   const body = await req.json().catch(() => ({} as any))
   const { refresh_token, device_type = 'web' } = body || {}
@@ -14,7 +17,7 @@ export async function POST(req: Request) {
   }
 
   try {
-    const upstream = await fetch('https://signboard.softacular.net/api/auth/logout', {
+    const upstream = await fetch(`${API_BASE}/auth/logout`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

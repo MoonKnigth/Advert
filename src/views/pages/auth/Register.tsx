@@ -1,25 +1,24 @@
 'use client'
 
 import { useState } from 'react'
+
 import Link from 'next/link'
+
+import { useRouter } from 'next/navigation'
+
 import Typography from '@mui/material/Typography'
 import IconButton from '@mui/material/IconButton'
 import InputAdornment from '@mui/material/InputAdornment'
-import Checkbox from '@mui/material/Checkbox'
 import Button from '@mui/material/Button'
-import FormControlLabel from '@mui/material/FormControlLabel'
-import Dialog from '@mui/material/Dialog'
-import DialogTitle from '@mui/material/DialogTitle'
-import DialogContent from '@mui/material/DialogContent'
-import DialogActions from '@mui/material/DialogActions'
-import TextField from '@mui/material/TextField'
+
 import { styled, useTheme } from '@mui/material/styles'
-import Logo from '@components/layout/shared/Logo'
-import CustomTextField from '@core/components/mui/TextField'
+
 import classnames from 'classnames'
-import { useRouter } from 'next/navigation'
 import Alert from '@mui/material/Alert'
 import Slide from '@mui/material/Slide'
+
+import CustomTextField from '@core/components/mui/TextField'
+import Logo from '@components/layout/shared/Logo'
 
 const RegisterIllustration = styled('img')(({ theme }) => ({
   zIndex: 2,
@@ -66,6 +65,7 @@ const Register = () => {
       setShowAlert(true)
       setShowTextAlert('Password and Confirm Password do not match.')
       setSeverity('error')
+
       return
     }
 
@@ -75,11 +75,14 @@ const Register = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, email, phone, password, password_confirmation })
       })
+
       const data = await response.json()
+
       if (response.ok) {
         setShowAlert(true)
         setShowTextAlert('Register Success, Please Confirm OTP')
         setSeverity('success')
+
         // alert('Register Success, Please Confirm OTP')
         console.log(data)
 
@@ -94,6 +97,7 @@ const Register = () => {
         setShowAlert(true)
         setShowTextAlert(`Register Failed: ${data.message || 'Unknown error'}`)
         setSeverity('error')
+
         // alert(`Register Failed: ${data.message || 'Unknown error'}`)
       }
     } catch (error: any) {
@@ -101,9 +105,11 @@ const Register = () => {
       setShowAlert(true)
       setShowTextAlert(`Error: ${error.message || error}`)
       setSeverity('error')
+
       // alert(`Error: ${error.message || error}`)
     }
   }
+
   // const handleOtpSubmit = async () => {
   //     console.log('Submitting OTP:', {
   //         otp_reference_number: otpReferenceNumber,
@@ -229,17 +235,6 @@ const Register = () => {
                     )
                   }
                 }}
-              />
-              <FormControlLabel
-                control={<Checkbox />}
-                label={
-                  <>
-                    <span>I agree to </span>
-                    <Link className='text-primary' href='/' onClick={e => e.preventDefault()}>
-                      privacy policy & terms
-                    </Link>
-                  </>
-                }
               />
               <Button fullWidth variant='contained' type='submit'>
                 Sign Up

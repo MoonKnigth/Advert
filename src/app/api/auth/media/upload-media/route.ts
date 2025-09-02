@@ -2,6 +2,7 @@
 import { NextResponse } from 'next/server'
 
 export const runtime = 'nodejs'
+import { API_BASE } from '../../../../../libs/apiConfig'
 
 export async function POST(req: Request) {
     try {
@@ -18,7 +19,7 @@ export async function POST(req: Request) {
             duplex: 'half'
         } as any
 
-        const res = await fetch('https://signboard.softacular.net/api/media/upload', options)
+        const res = await fetch(`${API_BASE}/api/media/upload`, options)
 
 
 

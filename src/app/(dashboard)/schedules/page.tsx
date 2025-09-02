@@ -2,10 +2,10 @@ import React from 'react'
 
 import type { Metadata } from 'next'
 
-import PropertyListing from '@views/pages/wizard-examples/property-listing'
+import DataTable from '@/views/pages/data/dataTable'
 
 export const metadata: Metadata = {
-  title: 'Add TV'
+  title: 'schedules'
 
   // description: 'Login to your account'
 }
@@ -13,7 +13,7 @@ export const metadata: Metadata = {
 function Page() {
   return (
     <div>
-      <PropertyListing />
+      <DataTable></DataTable>
     </div>
   )
 }

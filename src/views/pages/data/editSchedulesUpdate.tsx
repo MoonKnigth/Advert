@@ -1,4 +1,4 @@
-//src/views/pages/wizard-examples/property-listing/StepPropertyFeatures.tsx
+//src/views/pages/data/editSchedulesUpdate.tsx
 
 'use client'
 
@@ -40,21 +40,11 @@ import axios from 'axios'
 import Cookies from 'js-cookie'
 import { toast } from 'react-toastify'
 
+import type { MediaItem } from '../../../libs/mediaTypes'
+
 import DirectionalIcon from '@components/DirectionalIcon'
 
 /* ---------------------------------- Types ---------------------------------- */
-
-type MediaItem = {
-  id: number
-  title: string
-  type: string
-  fileUrl: string | null
-  thumbnailUrl: string | null
-  duration: number | null
-  fileSize: number | null
-  status: number | null
-  aspectRatio: string | null
-}
 
 interface UploadedFile {
   file: File
@@ -64,16 +54,6 @@ interface UploadedFile {
   preview?: string
   url?: string
   comments?: string
-}
-
-interface ScheduleItem {
-  id: number
-  type: string
-  set_time: boolean
-  set_date: boolean
-  ad_run_at: string
-  ad_run_at_to: string
-  duration?: number
 }
 
 interface LoadingState {
@@ -100,9 +80,9 @@ type Props = {
   handlePrev: () => void
   steps: { title: string; subtitle: string }[]
   isInternal?: boolean
+  scheduleId: number
   orientation: 'landscape' | 'portrait'
   selectedOldFiles: MediaItem[]
-  setSelectedOldFiles: React.Dispatch<React.SetStateAction<MediaItem[]>>
   adName: string
   adDescription: string
   uploadedFiles: UploadedFile[]
@@ -146,13 +126,14 @@ const formatDuration = (seconds: number | null): string => {
 
 /* --------------------------------- Component -------------------------------- */
 
-const StepPropertyFeatures = ({
+const EditSchedulesUpdate = ({
   activeStep,
   handlePrev,
   steps,
   isInternal = true,
   orientation,
   selectedOldFiles,
+  scheduleId,
   adName,
   adDescription,
   uploadedFiles,
@@ -184,10 +165,127 @@ const StepPropertyFeatures = ({
     details: ''
   })
 
+  const updateSchedule = async () => {
+    if (!scheduleId) {
+      toast.error('ไม่พบรหัสกำหนดการ', { position: 'top-center' })
+
+      return
+    }
+
+    if (!adName) {
+      toast.error('กรุณาระบุชื่อ Schedule', { position: 'top-center' })
+
+      return
+    }
+
+    if (!startDateTime || !endDateTime) {
+      toast.error('กรุณาระบุช่วงเวลาเริ่ม/สิ้นสุด', { position: 'top-center' })
+
+      return
+    }
+
+    const hasUpload = uploadedFiles.length > 0
+    const totalSteps = hasUpload ? 2 : 1 // อัปโหลด (ถ้ามี) + PUT
+
+    startLoading(totalSteps)
+
+    try {
+      let currentStep = 0
+      let newlyUploaded: MediaItem[] = []
+
+      // 1) อัปโหลดไฟล์ใหม่ (ถ้ามี)
+      if (hasUpload) {
+        currentStep++
+        updateLoadingState(currentStep, 'กำลังอัปโหลดไฟล์สื่อ', `อัปโหลด ${uploadedFiles.length} รายการ`)
+
+        const formData = new FormData()
+
+        uploadedFiles.forEach((file, i) => {
+          formData.append(`media[${i}].name`, file.name)
+          formData.append(`media[${i}].comments`, file.comments || '')
+          formData.append(`media[${i}].file`, file.file)
+        })
+
+        const uploadRes = await axios.post('/api/auth/media/upload-media', formData, {
+          headers: {
+            'Content-Type': 'multipart/form-data',
+            Authorization: `Bearer ${Cookies.get('accessToken')}`
+          }
+        })
+
+        if (!uploadRes.data?.success) {
+          throw new Error(uploadRes.data?.message || 'Upload failed')
+        }
+
+        newlyUploaded = uploadRes.data.data as MediaItem[]
+        updateLoadingState(currentStep, 'อัปโหลดไฟล์สำเร็จ', `สำเร็จ ${newlyUploaded.length} รายการ`)
+      }
+
+      // 2) PUT /api/schedules/[id]
+      const normalizeOrientation = (v: string) =>
+        v.toLowerCase() === 'landscape' ? 'horizontal' : v.toLowerCase() === 'portrait' ? 'vertical' : v
+
+      const run_at = formatLocalDateYYYYMMDD(startDateTime)
+      const run_at_to = formatLocalDateYYYYMMDD(endDateTime)
+
+      const schedule_items = [
+        ...newlyUploaded.map(m => ({
+          id: m.id,
+          type: m.type,
+          set_time: false,
+          set_date: true,
+          ad_run_at: run_at,
+          ad_run_at_to: run_at_to,
+          duration: m.type === 'image' ? 10 : undefined
+        })),
+        ...selectedOldFiles.map(m => ({
+          id: m.id,
+          type: m.type,
+          set_time: false,
+          set_date: true,
+          ad_run_at: run_at,
+          ad_run_at_to: run_at_to,
+          duration: m.type === 'image' ? m.duration || 10 : undefined
+        }))
+      ]
+
+      currentStep++
+      updateLoadingState(currentStep, 'กำลังอัปเดต Schedule', `อัปเดต ID: ${scheduleId}`)
+
+      const body = {
+        name: adName || 'Untitled Schedule',
+        orientation: normalizeOrientation(orientation),
+        run_at,
+        run_at_to,
+        schedule_items
+      }
+
+      const putRes = await axios.put(`/api/schedules/${scheduleId}`, body, {
+        headers: { 'Content-Type': 'application/json' }
+      })
+
+      const ok =
+        putRes.status === 200 ||
+        putRes.status === 204 ||
+        putRes.data?.success === true ||
+        putRes.data?.message?.toLowerCase?.().includes?.('success')
+
+      if (!ok) throw new Error(putRes.data?.message || 'Update failed')
+
+      updateLoadingState(currentStep, '🎉 อัปเดตสำเร็จ', 'บันทึกข้อมูลเรียบร้อย', 100, true, true)
+      toast.success('อัปเดต Schedule สำเร็จ', { position: 'top-right' })
+
+      // ปิด dialog + refresh ตาราง (จาก parent)
+    } catch (err: any) {
+      stopLoading()
+      toast.error(err?.message || 'เกิดข้อผิดพลาดขณะอัปเดต', { position: 'top-right' })
+    }
+  }
+
   /* ------------------------------- Debug effect ------------------------------ */
   useEffect(() => {
     // eslint-disable-next-line no-console
-    console.log('✅ StepPropertyFeatures props', {
+    console.log('✅ EditSchedulesUpdate props', {
       orientation,
       adName,
       adDescription,
@@ -243,25 +341,13 @@ const StepPropertyFeatures = ({
     })
   }, [uploadedFiles, setUploadedFiles])
 
-  useEffect(() => {
-    // cleanup URLs on unmount
-    return () => {
-      uploadedFiles.forEach(file => {
-        if (file.url && file.url.startsWith('blob:')) {
-          URL.revokeObjectURL(file.url)
-        }
-      })
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
   /* ------------------------------ Derived lists ------------------------------ */
 
-  const uploadedVideos = uploadedFiles.filter(file => file.type.startsWith('video/'))
-  const uploadedImages = uploadedFiles.filter(file => file.type.startsWith('image/'))
+  const uploadedVideos = uploadedFiles.filter(f => f.type.startsWith('video/'))
+  const uploadedImages = uploadedFiles.filter(f => f.type.startsWith('image/'))
 
-  const selectedOldVideos = selectedOldFiles.filter(file => file.type === 'video')
-  const selectedOldImages = selectedOldFiles.filter(file => file.type === 'image')
+  const selectedOldVideos = selectedOldFiles.filter(f => f.type === 'video')
+  const selectedOldImages = selectedOldFiles.filter(f => f.type === 'image')
 
   const allVideos = [...uploadedVideos, ...selectedOldVideos]
   const allImages = [...uploadedImages, ...selectedOldImages]
@@ -333,288 +419,35 @@ const StepPropertyFeatures = ({
     setCurrentImage(null)
   }
 
-  /* ------------------------------ Main workflow ----------------------------- */
-
-  const createScheduleAndAssign = async () => {
-    const hasUpload = uploadedFiles.length > 0
-    const totalSteps = hasUpload ? 3 : 2
-
-    startLoading(totalSteps)
-
-    try {
-      let uploadedFileIds: MediaItem[] = []
-      let currentStepNumber = 0
-
-      // Step 1: Upload files (if any)
-      if (hasUpload) {
-        currentStepNumber++
-        updateLoadingState(
-          currentStepNumber,
-          'กำลังอัปโหลดไฟล์สื่อ',
-          `อัปโหลดไฟล์ ${uploadedFiles.length} รายการ`,
-          (currentStepNumber / totalSteps) * 100
-        )
-
-        const formData = new FormData()
-
-        uploadedFiles.forEach((file, index) => {
-          formData.append(`media[${index}].name`, file.name)
-          formData.append(`media[${index}].comments`, file.comments || '')
-          formData.append(`media[${index}].file`, file.file)
-        })
-
-        const uploadRes = await axios.post('/api/auth/media/upload-media', formData, {
-          headers: {
-            'Content-Type': 'multipart/form-data',
-            Authorization: `Bearer ${Cookies.get('accessToken')}`
-          }
-        })
-
-        if (!uploadRes.data?.success) {
-          throw new Error(`Upload failed: ${uploadRes.data?.message || 'Unknown error'}`)
-        }
-
-        uploadedFileIds = uploadRes.data.data as MediaItem[]
-
-        updateLoadingState(
-          currentStepNumber,
-          'อัปโหลดไฟล์สำเร็จ',
-          `อัปโหลดสำเร็จ ${uploadedFileIds.length} ไฟล์`,
-          (currentStepNumber / totalSteps) * 100,
-          currentStepNumber === totalSteps,
-          true
-        )
-
-        await new Promise(r => setTimeout(r, 600))
-      }
-
-      // Step 2: Create schedule
-      currentStepNumber++
-      updateLoadingState(
-        currentStepNumber,
-        'กำลังสร้าง Schedule',
-        `สร้าง Schedule "${adName}"`,
-        (currentStepNumber / totalSteps) * 100
-      )
-
-      if (!startDateTime || !endDateTime) {
-        throw new Error('กรุณาระบุช่วงเวลาเริ่มต้น/สิ้นสุด')
-      }
-
-      // ใช้วันที่แบบ Local (Asia/Bangkok)
-      const run_at = formatLocalDateYYYYMMDD(startDateTime)
-      const run_at_to = formatLocalDateYYYYMMDD(endDateTime)
-
-      const allMediaItems: ScheduleItem[] = []
-
-      // New uploaded files
-      uploadedFileIds.forEach(file => {
-        allMediaItems.push({
-          id: file.id,
-          type: file.type,
-          set_time: false,
-          set_date: true,
-          ad_run_at: run_at,
-          ad_run_at_to: run_at_to,
-          duration: file.type === 'image' ? 10 : undefined
-        })
-      })
-
-      // Selected old files
-      selectedOldFiles.forEach(file => {
-        allMediaItems.push({
-          id: file.id,
-          type: file.type,
-          set_time: false,
-          set_date: true,
-          ad_run_at: run_at,
-          ad_run_at_to: run_at_to,
-          duration: file.type === 'image' ? file.duration || 10 : undefined
-        })
-      })
-
-      if (allMediaItems.length === 0) {
-        throw new Error('ไม่มีไฟล์ที่สามารถใช้สร้าง Schedule ได้')
-      }
-
-      const normalizeOrientation = (value: string) =>
-        value.toLowerCase() === 'landscape' ? 'horizontal' : value.toLowerCase() === 'portrait' ? 'vertical' : value
-
-      const schedulePayload = {
-        name: adName || 'Untitled Schedule',
-        orientation: normalizeOrientation(orientation),
-        run_at,
-        run_at_to,
-        schedule_items: allMediaItems
-      }
-
-      const scheduleRes = await axios.post('/api/proxy/schedules', schedulePayload, {
-        headers: { 'Content-Type': 'application/json' }
-      })
-
-      const scheduleResult = scheduleRes.data
-
-      if (!scheduleResult?.success) {
-        throw new Error(`สร้าง Schedule ไม่สำเร็จ: ${scheduleResult?.message || 'Unknown error'}`)
-      }
-
-      const scheduleId = scheduleResult.data.id as number
-
-      updateLoadingState(
-        currentStepNumber,
-        'สร้าง Schedule สำเร็จ',
-        `Schedule ID: ${scheduleId}`,
-        (currentStepNumber / totalSteps) * 100,
-        currentStepNumber === totalSteps,
-        true
-      )
-
-      await new Promise(r => setTimeout(r, 600))
-
-      // Step 3: Assign schedule
-      currentStepNumber++
-      updateLoadingState(
-        currentStepNumber,
-        'กำลังมอบหมาย Schedule ให้ Device',
-        `มอบหมายให้ ${selectedDeviceIds.length} เครื่อง`,
-        (currentStepNumber / totalSteps) * 100
-      )
-
-      if (!selectedDeviceIds?.length) {
-        throw new Error('ไม่พบ Device ที่เลือกไว้ ไม่สามารถ Assign Schedule ได้')
-      }
-
-      const assignPayload = {
-        devices: selectedDeviceIds,
-        groups: [],
-        schedules: [{ id: scheduleId, group_id: null }]
-      }
-
-      const assignRes = await axios.post('/api/proxy/schedule-assignments', assignPayload, {
-        headers: {
-          Authorization: `Bearer ${Cookies.get('accessToken')}`,
-          'Content-Type': 'application/json'
-        }
-      })
-
-      const assignResult = assignRes.data
-
-      const isAssignSuccess =
-        assignResult?.success === true ||
-        assignResult?.success === 'true' ||
-        assignResult?.message?.toLowerCase?.().includes('successfully') ||
-        assignResult?.message?.toLowerCase?.().includes('assigned') ||
-        assignRes.status === 200
-
-      if (!isAssignSuccess) {
-        throw new Error(`Assign failed: ${assignResult?.message || 'Unknown error'}`)
-      }
-
-      updateLoadingState(
-        currentStepNumber,
-        '🎉 ดำเนินการเสร็จสิ้น!',
-        'สร้างและมอบหมาย Schedule สำเร็จแล้ว',
-        100,
-        true,
-        true
-      )
-
-      await new Promise(r => setTimeout(r, 800))
-
-      toast.success(
-        <div>
-          <div>🎉 สร้างและมอบหมาย Schedule สำเร็จ!</div>
-          <div style={{ fontSize: 12, color: '#666', marginTop: 4 }}>
-            &quot;{scheduleResult.data.name || scheduleResult.data.scheduleNumber}&quot; → {selectedDeviceIds.length}{' '}
-            Device
-          </div>
-        </div>,
-        {
-          position: 'top-right',
-          autoClose: 5000,
-          hideProgressBar: false,
-          closeOnClick: true,
-          pauseOnHover: true,
-          draggable: true,
-          style: { borderRadius: 8, fontSize: 14 }
-        }
-      )
-    } catch (error: any) {
-      // ปิดโหลดเพื่อให้ผู้ใช้ทำอย่างอื่นได้
-      stopLoading()
-
-      // ตรวจจับ 409 Overlap
-      const isAxios = !!(error?.isAxiosError || (axios as any).isAxiosError?.(error))
-      const status = isAxios ? error?.response?.status : undefined
-      const data = isAxios ? error?.response?.data : undefined
-      const msg = (data?.message || error?.message || '').toString().toLowerCase()
-
-      if (status === 409 || msg.includes('overlap')) {
-        setConflictDialog({
-          open: true,
-          info: data?.conflict as ConflictInfo,
-          raw: data
-        })
-
-        return
-      }
-
-      // อื่น ๆ → แจ้งเตือนตามเดิม
-      setLoadingState(prev => ({
-        ...prev,
-        isCompleted: true,
-        isSuccess: false,
-        stepLabel: '❌ เกิดข้อผิดพลาด',
-        details: error?.message || 'Unknown error'
-      }))
-
-      toast.error(
-        <div>
-          <div>❌ เกิดข้อผิดพลาด</div>
-          <div style={{ fontSize: 12, color: '#666', marginTop: 4 }}>{error?.message || 'Unknown error'}</div>
-        </div>,
-        {
-          position: 'top-right',
-          autoClose: 8000,
-          hideProgressBar: false,
-          closeOnClick: true,
-          pauseOnHover: true,
-          draggable: true,
-          style: { borderRadius: 8, fontSize: 14 }
-        }
-      )
-    }
-  }
-
   /* --------------------------- Pre-check & trigger --------------------------- */
 
-  const checkUploadedFileStatus = async () => {
-    if (!adName) {
-      toast.error('กรุณาระบุชื่อ Schedule', { position: 'top-center', autoClose: 3000 })
+  // const checkUploadedFileStatus = async () => {
+  //   if (!adName) {
+  //     toast.error('กรุณาระบุชื่อ Schedule', { position: 'top-center', autoClose: 3000 })
 
-      return
-    }
+  //     return
+  //   }
 
-    if (uploadedFiles.length === 0 && selectedOldFiles.length === 0) {
-      toast.error('กรุณาเลือกไฟล์สื่อก่อนสร้าง Schedule', { position: 'top-center', autoClose: 3000 })
+  //   if (uploadedFiles.length === 0 && selectedOldFiles.length === 0) {
+  //     toast.error('กรุณาเลือกไฟล์สื่อก่อนสร้าง Schedule', { position: 'top-center', autoClose: 3000 })
 
-      return
-    }
+  //     return
+  //   }
 
-    if (!selectedDeviceIds?.length) {
-      toast.error('กรุณาเลือก Device ก่อนสร้าง Schedule', { position: 'top-center', autoClose: 3000 })
+  //   if (!selectedDeviceIds?.length) {
+  //     toast.error('กรุณาเลือก Device ก่อนสร้าง Schedule', { position: 'top-center', autoClose: 3000 })
 
-      return
-    }
+  //     return
+  //   }
 
-    if (!startDateTime || !endDateTime) {
-      toast.error('กรุณาระบุช่วงเวลาที่ต้องการเล่นโฆษณา', { position: 'top-center', autoClose: 3000 })
+  //   if (!startDateTime || !endDateTime) {
+  //     toast.error('กรุณาระบุช่วงเวลาที่ต้องการเล่นโฆษณา', { position: 'top-center', autoClose: 3000 })
 
-      return
-    }
+  //     return
+  //   }
 
-    await createScheduleAndAssign()
-  }
+  //   await createScheduleAndAssign()
+  // }
 
   /* ------------------------------ Loading dialog ----------------------------- */
 
@@ -739,12 +572,7 @@ const StepPropertyFeatures = ({
                     orientation === 'landscape' ? '/images/tv/Vector_red_big.svg' : '/images/tv/Vector_red_big_l.svg'
                   }
                   alt={orientation === 'landscape' ? 'แนวนอน (16:9)' : 'แนวตั้ง (9:16)'}
-                  sx={{
-                    mb: 3,
-                    width: '100%',
-                    height: 'auto',
-                    maxWidth: '100%'
-                  }}
+                  sx={{ mb: 3 }}
                 />
                 <Typography variant='h5'>{orientation === 'landscape' ? 'แนวนอน (16:9)' : 'แนวตั้ง (9:16)'}</Typography>
               </Box>
@@ -755,12 +583,12 @@ const StepPropertyFeatures = ({
             <Container>
               <Box display='flex' alignItems='center' flexDirection='column'>
                 <Box display='flex' flexDirection='column' sx={{ width: '80%' }}>
-                  <Typography display='flex' variant='h3' sx={{ wordBreak: 'break-word', whiteSpace: 'normal' }}>
+                  <Typography display='flex' variant='h3'>
                     {adName || 'ไม่ได้ระบุชื่อ'}
                   </Typography>
-                  <Typography variant='h6' color='secondary' sx={{ wordBreak: 'break-word', whiteSpace: 'normal' }}>
+                  {/* <Typography variant='h6' color='secondary'>
                     {adDescription || 'ไม่มีคำอธิบาย'}
-                  </Typography>
+                  </Typography> */}
 
                   <Divider sx={{ my: 5, height: 1.5, backgroundColor: '#ccc', borderRadius: 1 }} />
 
@@ -846,7 +674,7 @@ const StepPropertyFeatures = ({
           </Box>
 
           <Grid container spacing={2}>
-            {uploadedVideos.map((video, index) => (
+            {/* {uploadedVideos.map((video, index) => (
               <Grid size={{ md: 3 }} key={`uploaded-video-${index}`}>
                 <Card>
                   <CardMedia
@@ -886,7 +714,7 @@ const StepPropertyFeatures = ({
                   </CardContent>
                 </Card>
               </Grid>
-            ))}
+            ))} */}
 
             {selectedOldVideos.map(video => (
               <Grid size={{ md: 3 }} key={`old-video-${video.id}`}>
@@ -907,7 +735,7 @@ const StepPropertyFeatures = ({
                       {video.title}
                     </Typography>
                     <Box display='flex' justifyContent='space-between' fontSize={12} mt={0.5}>
-                      <Typography>{formatDuration(video.duration)}</Typography>
+                      <Typography>{formatDuration(video.duration ?? null)}</Typography>
                       <Typography>{video.fileSize ? formatFileSize(video.fileSize) : 'N/A'}</Typography>
                     </Box>
                     <Button
@@ -1083,7 +911,7 @@ const StepPropertyFeatures = ({
 
               <Button
                 variant='contained'
-                onClick={checkUploadedFileStatus}
+                onClick={updateSchedule} // ⬅️ เดิมอาจเป็น checkUploadedFileStatus
                 disabled={loadingState.isOpen}
                 color={activeStep === steps.length - 1 ? 'success' : 'error'}
                 endIcon={
@@ -1096,7 +924,7 @@ const StepPropertyFeatures = ({
                   )
                 }
               >
-                {loadingState.isOpen ? 'กำลังดำเนินการ...' : 'Create Schedule & Assign'}
+                {loadingState.isOpen ? 'กำลังดำเนินการ...' : 'Update'}
               </Button>
             </div>
           </Grid>
@@ -1155,4 +983,4 @@ const StepPropertyFeatures = ({
   )
 }
 
-export default StepPropertyFeatures
+export default EditSchedulesUpdate

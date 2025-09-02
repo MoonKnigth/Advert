@@ -3,9 +3,10 @@
 'use client'
 
 import type { ChangeEvent, DragEvent } from 'react'
-import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 
 import { VideoLibrary as VideoIcon, Image as ImageIcon } from '@mui/icons-material'
+import Pagination from '@mui/material/Pagination'
 
 // MUI
 import Radio from '@mui/material/Radio'
@@ -25,7 +26,8 @@ import {
   Checkbox,
   CardContent,
   Card,
-  Tab
+  Tab,
+  CircularProgress
 } from '@mui/material'
 import { TabContext, TabList, TabPanel } from '@mui/lab'
 
@@ -62,6 +64,7 @@ type Props = {
   isInternalEdit?: boolean
   onOrientationChange?: (value: 'landscape' | 'portrait') => void
   selectedOldFiles: MediaItem[]
+  setSelectedOldFiles: React.Dispatch<React.SetStateAction<MediaItem[]>> // ✅ เพิ่มบรรทัดนี้ฃ
   oldFiles: MediaItem[]
   setOldFiles: React.Dispatch<React.SetStateAction<MediaItem[]>>
   selected: number[]
@@ -73,6 +76,37 @@ type Props = {
   uploadedFiles: UploadedFile[]
   setUploadedFiles: React.Dispatch<React.SetStateAction<UploadedFile[]>>
   orientation: 'landscape' | 'portrait'
+}
+
+// ป้องกัน URL เป็น cloud.softacular.netundefined
+const buildCloudUrl = (cloud: string, part?: string | null) => {
+  if (!part) return null
+  const prefix = cloud.replace(/\/$/, '')
+  const suffix = part.startsWith('/') ? part : `/${part}`
+
+  return `${prefix}${suffix}`
+}
+
+// ทำให้โครงสร้าง media สม่ำเสมอ
+
+const normalizeMedia = (m: any): MediaItem => {
+  const rawType = String(m?.type ?? m?.file_type ?? '').toLowerCase()
+  const type: 'video' | 'image' = rawType === 'video' ? 'video' : 'image'
+
+  // ✅ แปลง status ให้เป็น number หรือ null
+  const status = typeof m?.status === 'number' ? m.status : m?.status != null ? Number(m.status) : null
+
+  return {
+    id: Number(m?.id ?? 0),
+    title: m?.title ?? m?.name ?? '',
+    type,
+    fileUrl: m?.file_url ?? m?.fileUrl ?? null,
+    thumbnailUrl: m?.thumbnail_url ?? m?.thumbnailUrl ?? null,
+    duration: m?.duration != null ? Number(m.duration) : null,
+    fileSize: m?.file_size != null ? Number(m.file_size) : m?.fileSize != null ? Number(m.fileSize) : null,
+    aspectRatio: m?.aspect_ratio ?? m?.aspectRatio ?? null,
+    status // ✅ เติมให้ตรงกับ MediaItem
+  }
 }
 
 // ===== Styled =====
@@ -148,6 +182,7 @@ const StepPropertyDetails = ({
   onOrientationChange,
   oldFiles,
   setOldFiles,
+  setSelectedOldFiles,
   selected,
   setSelected,
   adName,
@@ -180,17 +215,75 @@ const StepPropertyDetails = ({
   // Local states
   const [isDragging, setIsDragging] = useState(false)
   const [uploadErrors, setUploadErrors] = useState<string[]>([])
-  const [tabValue, setTabValue] = useState<string>('1')
+  const [tabValue, setTabValue] = useState<'1' | '2'>('1')
   const [showOldFiles, setShowOldFiles] = useState<boolean>(false)
   const [editingIndex, setEditingIndex] = useState<number | null>(null)
   const [newFileName, setNewFileName] = useState<string>('')
 
+  // แยกตาม type จาก oldFiles (ถ้าเก็บแยกอยู่แล้ว ข้ามสองบรรทัดนี้)
+  const videoFiles = oldFiles.filter(f => f.type === 'video')
+  const imageFiles = oldFiles.filter(f => f.type === 'image')
+
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const mediaCacheRef = useRef<Map<number, MediaItem>>(new Map())
   const cloud = 'https://cloud.softacular.net'
 
   // Storage usage
   const [, setUsedByteInGB] = useState<number>(0)
   const [, setMaxStorage] = useState<number>(0)
+
+  const [mediaPage, setMediaPage] = useState(0) // 0-based (ตรงกับ API)
+  const [mediaSize, setMediaSize] = useState(12)
+  const [mediaTotalPages, setMediaTotalPages] = useState(0)
+  const [mediaTotalElements, setMediaTotalElements] = useState(0)
+  const [mediaLoading, setMediaLoading] = useState(false)
+
+  const fetchOldFilesPage = useCallback(
+    async (page = 0, forcedType?: 'video' | 'image') => {
+      try {
+        setMediaLoading(true)
+        const type = forcedType || (tabValue === '1' ? 'video' : 'image')
+        const token = Cookies.get('accessToken') || ''
+
+        console.log(`Fetching ${type} files for page ${page}`) // ✅ เพิ่ม debug log
+
+        const res = await fetch(`/api/auth/media?page=${page}&size=${mediaSize}&type=${type}`, {
+          method: 'GET',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          cache: 'no-store'
+        })
+
+        if (!res.ok) throw new Error('Failed to fetch media')
+
+        const data = await res.json()
+        const rawList = data?.data?.media ?? data?.media ?? []
+        const normalized = Array.isArray(rawList) ? rawList.map(normalizeMedia) : []
+
+        normalized.forEach(item => mediaCacheRef.current.set(item.id, item))
+        setOldFiles(normalized)
+
+        // ✅ ต้องแน่ใจว่า page state อัพเดทถูกต้อง
+        const actualPage = data?.data?.page ?? page
+        const actualTotalPages = data?.data?.total_pages ?? 0
+        const actualTotalElements = data?.data?.total_elements ?? 0
+
+        setMediaPage(actualPage)
+        setMediaSize(data?.data?.size ?? mediaSize)
+        setMediaTotalPages(actualTotalPages)
+        setMediaTotalElements(actualTotalElements)
+
+        console.log('Fetched page:', actualPage, 'Total pages:', actualTotalPages) // debug
+      } catch (e) {
+        console.error('fetchOldFilesPage error:', e)
+        setOldFiles([])
+        setMediaTotalPages(0)
+        setMediaTotalElements(0)
+      } finally {
+        setMediaLoading(false)
+      }
+    },
+    [tabValue, mediaSize, setOldFiles] // ✅ เพิ่ม setOldFiles ใน dependenciesฃ
+  )
 
   const fetchStorageUsage = useCallback(async () => {
     try {
@@ -218,6 +311,14 @@ const StepPropertyDetails = ({
   useEffect(() => {
     fetchStorageUsage()
   }, [fetchStorageUsage])
+
+  useEffect(() => {
+    if (showOldFiles) {
+      const t: 'video' | 'image' = tabValue === '1' ? 'video' : 'image'
+
+      fetchOldFilesPage(0, t) // อ้างประเภทปัจจุบันแบบ explicit
+    }
+  }, [showOldFiles, tabValue, fetchOldFilesPage])
 
   // ===== File validation & uploads =====
   const validateFile = (file: File): string | null => {
@@ -270,15 +371,6 @@ const StepPropertyDetails = ({
     [setUploadedFiles, uploadedFiles]
   )
 
-  // cleanup object URLs on unmount
-  useEffect(() => {
-    return () => {
-      uploadedFiles.forEach(f => {
-        if (f.preview?.startsWith('blob:')) URL.revokeObjectURL(f.preview)
-      })
-    }
-  }, []) // eslint-disable-line
-
   const handleFileInputChange = (event: ChangeEvent<HTMLInputElement>) => {
     handleFileUpload(event.target.files)
     if (event.target) event.target.value = ''
@@ -328,113 +420,123 @@ const StepPropertyDetails = ({
     onOrientationChange?.(value)
   }
 
-  // ===== Old files (library) =====
-  const handleOldFilesClick = useCallback(async () => {
-    const willExpand = !showOldFiles
+  const handleOldFilesClick = useCallback(() => {
+    const next = !showOldFiles
 
-    setShowOldFiles(willExpand)
-    if (!willExpand) return
+    setShowOldFiles(next)
 
-    try {
-      const res = await fetch('/api/auth/media', {
-        method: 'GET',
-        headers: {
-          Authorization: `Bearer ${Cookies.get('accessToken')}`,
-          'Content-Type': 'application/json'
-        }
-      })
-
-      if (!res.ok) {
-        console.error('Failed to fetch old files')
-
-        return
-      }
-
-      const data = await res.json()
-
-      // tolerate different shapes
-      const files: MediaItem[] = data?.data?.data?.media || data?.data?.media || data?.media || data?.data || []
-
-      setOldFiles(Array.isArray(files) ? files : [])
-    } catch (err) {
-      console.error('Error fetching old files', err)
+    if (next) {
+      setMediaPage(0) // ✅ reset page state
+      fetchOldFilesPage(0) // เริ่มหน้า 0
     }
-  }, [showOldFiles, setOldFiles])
+  }, [showOldFiles, fetchOldFilesPage])
 
-  const handleSelect = (id: number) => {
-    setSelected(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]))
+  const handleTabChange = (_: React.SyntheticEvent, val: string) => {
+    setTabValue(val as '1' | '2')
+    setMediaPage(0) // ✅ reset page เป็น 0 เมื่อเปลี่ยน tab
+
+    if (showOldFiles) {
+      fetchOldFilesPage(0, val === '1' ? 'video' : 'image')
+    }
   }
 
-  const videoFiles = useMemo(() => oldFiles.filter(it => it.type === 'video' && it.status === 1), [oldFiles])
-  const imageFiles = useMemo(() => oldFiles.filter(it => it.type === 'image' && it.status === 1), [oldFiles])
+  const handlePageChange = useCallback(
+    (_: React.ChangeEvent<unknown>, newPage: number) => {
+      const zeroBasedPage = newPage - 1
+      const t: 'video' | 'image' = tabValue === '1' ? 'video' : 'image'
 
-  const handleTabChange = (_: React.SyntheticEvent, val: string) => setTabValue(val)
+      fetchOldFilesPage(zeroBasedPage, t)
+    },
+    [fetchOldFilesPage, tabValue]
+  )
 
+  const handleSelect = (id: number) => {
+    // หาตัว item จากหน้าที่แสดงอยู่ (หรือจาก cache ถ้ามี)
+    const item = mediaCacheRef.current.get(id)
+
+    if (!item) return
+
+    setSelected(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]))
+
+    // อัปเดต selectedOldFiles แบบ toggle โดยใช้ตัว item จริงทันที
+    setSelectedOldFiles(prev => {
+      const exists = prev.some(m => m.id === id)
+
+      return exists ? prev.filter(m => m.id !== id) : [...prev, item]
+    })
+  }
+
+  // เดิม: const renderMediaGrid = (mediaItems: MediaItem[]) => (
   const renderMediaGrid = (mediaItems: MediaItem[]) => (
     <Grid container spacing={3}>
-      {mediaItems.map(item => (
-        <Grid size={{ xs: 12, sm: 6, md: 4, lg: 3 }} key={item.id}>
-          <Card
-            onClick={() => handleSelect(item.id)}
-            sx={{
-              position: 'relative',
-              height: '100%',
-              transition: 'all 0.2s ease',
-              cursor: 'pointer',
-              border: selected.includes(item.id) ? 2 : 1,
-              borderColor: selected.includes(item.id) ? 'primary.main' : 'divider',
-              '&:hover': { transform: 'translateY(-2px)', boxShadow: 4 }
-            }}
-          >
-            <Checkbox
-              checked={selected.includes(item.id)}
-              onChange={() => handleSelect(item.id)}
-              onClick={e => e.stopPropagation()}
+      {mediaItems.map(item => {
+        const src = buildCloudUrl(cloud, item.thumbnailUrl || item.fileUrl) // ✅ กัน undefined
+
+        return (
+          <Grid size={{ xs: 12, sm: 6, md: 4, lg: 3 }} key={item.id}>
+            <Card
+              onClick={() => handleSelect(item.id)}
               sx={{
-                position: 'absolute',
-                top: 8,
-                right: 8,
-                zIndex: 2,
-                bgcolor: 'background.paper',
-                borderRadius: 1,
-                boxShadow: 2,
-                '&:hover': { bgcolor: 'background.paper' }
+                position: 'relative',
+                height: '100%',
+                transition: 'all 0.2s ease',
+                cursor: 'pointer',
+                border: selected.includes(item.id) ? 2 : 1,
+                borderColor: selected.includes(item.id) ? 'primary.main' : 'divider',
+                '&:hover': { transform: 'translateY(-2px)', boxShadow: 4 }
               }}
-            />
-            <Box sx={{ position: 'relative', height: 200, bgcolor: 'grey.100', overflow: 'hidden' }}>
-              <img
-                src={`${cloud}${item.thumbnailUrl || item.fileUrl}`}
-                alt={item.title}
-                style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                onError={e => {
-                  ;(e.currentTarget as HTMLImageElement).style.display = 'none'
-                }}
-              />
-            </Box>
-            <CardContent sx={{ flexGrow: 1 }}>
-              <Typography
-                variant='h6'
+            >
+              <Checkbox
+                checked={selected.includes(item.id)}
+                onChange={() => handleSelect(item.id)}
+                onClick={e => e.stopPropagation()}
                 sx={{
-                  fontSize: '1rem',
-                  fontWeight: 600,
-                  mb: 1,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap'
+                  position: 'absolute',
+                  top: 8,
+                  right: 8,
+                  zIndex: 2,
+                  bgcolor: 'background.paper',
+                  borderRadius: 1,
+                  boxShadow: 2,
+                  '&:hover': { bgcolor: 'background.paper' }
                 }}
-                title={item.title}
-              >
-                {item.title}
-              </Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-      ))}
+              />{' '}
+              <Box sx={{ position: 'relative', height: 200, bgcolor: 'grey.100', overflow: 'hidden' }}>
+                {src ? (
+                  <img
+                    src={src}
+                    alt={item.title}
+                    style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                    onError={e => {
+                      ;(e.currentTarget as HTMLImageElement).style.display = 'none'
+                    }}
+                  />
+                ) : (
+                  <Box
+                    sx={{
+                      width: '100%',
+                      height: '100%',
+                      display: 'grid',
+                      placeItems: 'center',
+                      color: 'text.disabled'
+                    }}
+                  >
+                    ไม่มีพรีวิว
+                  </Box>
+                )}
+              </Box>
+              <CardContent sx={{ flexGrow: 1 }}>
+                <Typography /* ...เหมือนเดิม... */ title={item.title}>{item.title}</Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+        )
+      })}
     </Grid>
   )
 
   // ===== Ad name/desc =====
-  const handleAdNameChange = (e: ChangeEvent<HTMLInputElement>) => setAdName(e.target.value)
+  // const handleAdNameChange = (e: ChangeEvent<HTMLInputElement>) => setAdName(e.target.value)
   const handleAdDescriptionChange = (e: ChangeEvent<HTMLInputElement>) => setAdDescription(e.target.value)
 
   // ===== Inline rename =====
@@ -443,9 +545,53 @@ const StepPropertyDetails = ({
     setNewFileName(uploadedFiles[index].name)
   }
 
+  // อนุญาต: ตัวอักษรทุกภาษา (L), ตัวเลข (N), เครื่องหมายประกอบ (M), เว้นวรรค, _, -
+  const sanitizeName = (s: string) =>
+    s
+      .normalize('NFC')
+      .replace(/[^\p{L}\p{N}\p{M} _-]/gu, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+
+  const isAllowedChunk = (s: string) => /^[\p{L}\p{N}\p{M} _-]+$/u.test(s)
+
+  // กันตั้งแต่ตอน “กำลังพิมพ์” (block char ที่ไม่อนุญาต)
+  const handleNameBeforeInput = (e: React.FormEvent<HTMLInputElement>) => {
+    const data = (e.nativeEvent as InputEvent).data // อักขระที่จะถูกแทรก
+
+    if (!data) return // เช่น ลบ/ลูกศร/คีย์ควบคุม
+
+    if (!isAllowedChunk(data)) {
+      e.preventDefault()
+      alert('อนุญาตเฉพาะ ตัวอักษรทุกภาษา, ตัวเลข, เว้นวรรค, _ และ -')
+    }
+  }
+
+  // คุมซ้ำตอนมีการเปลี่ยนค่า (เช่น paste) — sanitize แล้วแจ้งเตือนถ้ามีการตัดทิ้ง
+  const handleAdNameChange = (e: ChangeEvent<HTMLInputElement>) => {
+    const raw = e.target.value
+    const clean = sanitizeName(raw)
+
+    if (raw !== clean) {
+      alert('มีอักขระที่ไม่อนุญาต ระบบได้ลบออกให้อัตโนมัติ')
+    }
+
+    setAdName(clean)
+  }
+
+  // เก็บงานหลังพิมพ์เสร็จ (เช่นมีช่องว่างเกิน) — optional
+  const handleAdNameBlur = () => {
+    setAdName(prev => sanitizeName(prev))
+  }
+
   const handleSave = () => {
     if (editingIndex === null) return
-    const sanitized = newFileName.replace(/[^a-zA-Z0-9 _-]/g, '').trim()
+
+    const sanitized = newFileName
+      .normalize('NFC')
+      .replace(/[^\p{L}\p{N}\p{M} _-]/gu, '')
+      .replace(/\s+/g, ' ')
+      .trim()
 
     if (!sanitized) return setEditingIndex(null)
     setUploadedFiles(prev => {
@@ -585,7 +731,12 @@ const StepPropertyDetails = ({
             </Box>
 
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-              <Chip label={`${oldFiles.length} ไฟล์ทั้งหมด`} color='secondary' variant='outlined' size='small' />
+              <Chip
+                label={mediaLoading ? 'กำลังโหลด…' : `${mediaTotalElements} ไฟล์ทั้งหมด`}
+                color='secondary'
+                variant='outlined'
+                size='small'
+              />
               {selected.length > 0 && (
                 <Chip label={`${selected.length} ไฟล์ที่เลือก`} color='primary' variant='filled' size='small' />
               )}
@@ -597,68 +748,126 @@ const StepPropertyDetails = ({
           </Box>
         </OldFilesZone>
 
-        {showOldFiles && oldFiles.length > 0 && (
-          <Box sx={{ borderRadius: 2, overflow: 'hidden', mb: 2, backgroundColor: 'background.paper', boxShadow: 2 }}>
-            <TabContext value={tabValue}>
-              <Box
-                sx={{
-                  borderBottom: 1,
-                  borderColor: 'divider',
-                  position: 'sticky',
-                  top: 0,
-                  bgcolor: 'background.paper',
-                  zIndex: 1
-                }}
-              >
-                <TabList onChange={handleTabChange} variant='fullWidth'>
-                  <Tab
-                    value='1'
-                    label={
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                        <VideoIcon />
-                        <span>วิดีโอ</span>
-                        <Chip label={videoFiles.length} size='small' color='primary' variant='outlined' />
-                      </Box>
-                    }
-                    sx={{ textTransform: 'none', fontWeight: 600 }}
-                  />
-                  <Tab
-                    value='2'
-                    label={
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                        <ImageIcon />
-                        <span>รูปภาพ</span>
-                        <Chip label={imageFiles.length} size='small' color='secondary' variant='outlined' />
-                      </Box>
-                    }
-                    sx={{ textTransform: 'none', fontWeight: 600 }}
-                  />
-                </TabList>
-              </Box>
+        {showOldFiles && (
+          <TabContext value={tabValue}>
+            <Box
+              sx={{
+                borderBottom: 1,
+                borderColor: 'divider',
+                position: 'sticky',
+                top: 0,
+                bgcolor: 'background.paper',
+                zIndex: 1
+              }}
+            >
+              <TabList onChange={handleTabChange} variant='fullWidth'>
+                <Tab
+                  value='1'
+                  label={
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <VideoIcon />
+                      <span>วิดีโอ</span>
+                      <Chip label={videoFiles.length} size='small' color='primary' variant='outlined' />
+                    </Box>
+                  }
+                  sx={{ textTransform: 'none', fontWeight: 600 }}
+                />
+                <Tab
+                  value='2'
+                  label={
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <ImageIcon />
+                      <span>รูปภาพ</span>
+                      <Chip label={imageFiles.length} size='small' color='secondary' variant='outlined' />
+                    </Box>
+                  }
+                  sx={{ textTransform: 'none', fontWeight: 600 }}
+                />
+              </TabList>
+            </Box>
 
-              <TabPanel value='1' sx={{ p: 3, maxHeight: 400, overflow: 'auto' }}>
-                {videoFiles.length > 0 ? (
-                  renderMediaGrid(videoFiles)
-                ) : (
-                  <Box sx={{ textAlign: 'center', py: 4 }}>
-                    <VideoIcon sx={{ fontSize: 48, color: 'text.disabled', mb: 2 }} />
-                    <Typography color='text.secondary'>ไม่มีไฟล์วิดีโอ</Typography>
-                  </Box>
-                )}
-              </TabPanel>
+            {/* ใน TabPanel value='1' */}
+            <TabPanel value='1' sx={{ p: 3, maxHeight: 400, overflow: 'auto' }}>
+              {mediaLoading ? (
+                <Box sx={{ display: 'grid', placeItems: 'center', py: 6 }}>
+                  <CircularProgress />
+                </Box>
+              ) : videoFiles.length > 0 ? (
+                <>
+                  {renderMediaGrid(videoFiles)}
+                  {mediaTotalPages > 1 && (
+                    <Box sx={{ display: 'flex', justifyContent: 'center', mt: 3 }}>
+                      <Pagination
+                        count={mediaTotalPages}
+                        page={mediaPage + 1} // แปลงเป็น 1-based สำหรับ UI
+                        onChange={handlePageChange}
+                        variant='tonal'
+                        shape='rounded'
+                        color='primary'
+                        siblingCount={1}
+                        boundaryCount={1}
+                        disabled={mediaLoading}
+                        showFirstButton
+                        showLastButton
+                      />
+                    </Box>
+                  )}
+                  <Typography
+                    variant='caption'
+                    sx={{ display: 'block', textAlign: 'center', mt: 1, color: 'text.secondary' }}
+                  >
+                    หน้า {mediaPage + 1} / {Math.max(1, mediaTotalPages)} • ทั้งหมด {mediaTotalElements} ไฟล์
+                  </Typography>
+                </>
+              ) : (
+                <Box sx={{ textAlign: 'center', py: 4 }}>
+                  <VideoIcon sx={{ fontSize: 48, color: 'text.disabled', mb: 2 }} />
+                  <Typography color='text.secondary'>ไม่มีไฟล์วิดีโอ</Typography>
+                </Box>
+              )}
+            </TabPanel>
 
-              <TabPanel value='2' sx={{ p: 3, maxHeight: 400, overflow: 'auto' }}>
-                {imageFiles.length > 0 ? (
-                  renderMediaGrid(imageFiles)
-                ) : (
-                  <Box sx={{ textAlign: 'center', py: 4 }}>
-                    <ImageIcon sx={{ fontSize: 48, color: 'text.disabled', mb: 2 }} />
-                    <Typography color='text.secondary'>ไม่มีไฟล์รูปภาพ</Typography>
-                  </Box>
-                )}
-              </TabPanel>
-            </TabContext>
-          </Box>
+            {/* ใน TabPanel value='2' */}
+            <TabPanel value='2' sx={{ p: 3, maxHeight: 400, overflow: 'auto' }}>
+              {mediaLoading ? (
+                <Box sx={{ display: 'grid', placeItems: 'center', py: 6 }}>
+                  <CircularProgress />
+                </Box>
+              ) : imageFiles.length > 0 ? (
+                <>
+                  {renderMediaGrid(imageFiles)}
+                  {mediaTotalPages > 1 && (
+                    <Box sx={{ display: 'flex', justifyContent: 'center', mt: 3 }}>
+                      <Pagination
+                        count={mediaTotalPages}
+                        page={mediaPage + 1} // แปลงเป็น 1-based สำหรับ UI
+                        onChange={handlePageChange}
+                        variant='tonal'
+                        shape='rounded'
+                        color='primary'
+                        siblingCount={1}
+                        boundaryCount={1}
+                        disabled={mediaLoading}
+                        showFirstButton
+                        showLastButton
+                      />
+                    </Box>
+                  )}
+                  <Typography
+                    variant='caption'
+                    sx={{ display: 'block', textAlign: 'center', mt: 1, color: 'text.secondary' }}
+                  >
+                    หน้า {mediaPage + 1} / {Math.max(1, mediaTotalPages)} • ทั้งหมด {mediaTotalElements} ไฟล์
+                  </Typography>
+                </>
+              ) : (
+                <Box sx={{ textAlign: 'center', py: 4 }}>
+                  <ImageIcon sx={{ fontSize: 48, color: 'text.disabled', mb: 2 }} />
+                  <Typography color='text.secondary'>ไม่มีไฟล์รูปภาพ</Typography>
+                </Box>
+              )}
+            </TabPanel>
+          </TabContext>
         )}
       </Grid>
 
@@ -709,17 +918,21 @@ const StepPropertyDetails = ({
         {/* Uploaded list */}
         {uploadedFiles.map((file, index) => (
           <FilePreview key={`${file.name}-${file.size}-${index}`}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-              {/* thumbnail */}
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flex: 1 }}>
+              {/* thumbnail/ไอคอนซ้าย — คงเดิม ไม่ถูกซ่อน */}
               {file.type.startsWith('image/') ? (
-                <Box sx={{ width: 56, height: 56, overflow: 'hidden', borderRadius: 1, bgcolor: 'grey.100' }}>
-                  {file.preview && (
-                    <img
-                      src={file.preview}
-                      alt={file.name}
-                      style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                    />
-                  )}
+                <Box
+                  sx={{
+                    width: 56,
+                    height: 56,
+                    borderRadius: 1,
+                    display: 'grid',
+                    placeItems: 'center',
+                    bgcolor: 'grey.100',
+                    color: 'primary.main'
+                  }}
+                >
+                  <i className='bx bx-image' style={{ fontSize: 24 }} />
                 </Box>
               ) : (
                 <Box
@@ -733,41 +946,73 @@ const StepPropertyDetails = ({
                     color: 'primary.main'
                   }}
                 >
-                  <i className='bx bx-video' />
+                  <i className='bx bx-video' style={{ fontSize: 24 }} />
                 </Box>
               )}
 
-              <Box>
-                <Typography
-                  variant='h6'
+              {/* ✅ โซนชื่อไฟล์ + ขนาดไฟล์ (ทำเป็น relative เพื่อซ้อน TextField ทับได้) */}
+              <Box
+                sx={{
+                  position: 'relative',
+                  flex: 1, // ให้กินพื้นที่ที่เหลือ
+                  minWidth: { xs: 200, sm: 320, md: 450 }
+                }}
+              >
+                {/* โหมดแสดงผลปกติ */}
+                <Box
                   sx={{
-                    width: { xs: 200, sm: 320, md: 450 },
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap'
+                    opacity: editingIndex === index ? 0 : 1,
+                    transition: 'opacity .15s',
+                    width: '600px'
                   }}
-                  title={file.name}
                 >
-                  {file.name}
-                </Typography>
-                <Typography variant='caption' sx={{ color: 'text.secondary' }}>
-                  {formatFileSize(file.size)}
-                </Typography>
+                  <Typography
+                    variant='h6'
+                    sx={{
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap'
+                    }}
+                    title={file.name}
+                  >
+                    {file.name}
+                  </Typography>
+                  <Typography variant='caption' sx={{ color: 'text.secondary' }}>
+                    {formatFileSize(file.size)}
+                  </Typography>
+                </Box>
+
+                {/* ✅ โหมดแก้ไข: ซ้อน TextField ทับเต็มพื้นที่ */}
+                {editingIndex === index && (
+                  <Box
+                    sx={{
+                      position: 'absolute',
+                      inset: 0, // เต็มกล่องชื่อไฟล์
+                      display: 'flex',
+                      alignItems: 'center'
+                    }}
+                  >
+                    <TextField
+                      value={newFileName}
+                      onChange={e => setNewFileName(e.target.value)}
+                      onKeyDown={handleKeyDown}
+                      variant='outlined'
+                      size='small'
+                      fullWidth // เต็มความกว้างจริง
+                      autoFocus
+                      sx={{
+                        bgcolor: 'background.paper' // สีพื้นหลังทับข้อความเดิม
+                      }}
+                    />
+                  </Box>
+                )}
               </Box>
             </Box>
 
+            {/* ไอคอนฝั่งขวา — คุณบอกว่า "ไม่ต้องซ่อน icon" ฝั่งนี้ยังอยู่ครบ */}
             <Box display='flex' alignItems='center' gap={1}>
               {editingIndex === index ? (
                 <>
-                  <TextField
-                    value={newFileName}
-                    onChange={e => setNewFileName(e.target.value)}
-                    variant='outlined'
-                    size='small'
-                    sx={{ minWidth: { xs: 160, sm: 260, md: 300 } }}
-                    onKeyDown={handleKeyDown}
-                    autoFocus
-                  />
                   <IconButton onClick={handleSave} color='success' sx={{ ml: 0.5 }}>
                     <i className='bx bx-check' />
                   </IconButton>
@@ -817,8 +1062,11 @@ const StepPropertyDetails = ({
           placeholder='ตั้งชื่อตามต้องการ'
           value={adName}
           onChange={handleAdNameChange}
+          onBeforeInput={handleNameBeforeInput}
+          onBlur={handleAdNameBlur}
         />
       </Grid>
+
       <Grid size={{ xs: 12 }}>
         <TextField
           fullWidth

@@ -2,13 +2,17 @@ import { NextResponse } from 'next/server'
 
 import axios from 'axios'
 
+import { API_BASE } from '../../../../libs/apiConfig'
+
+
+
 export async function POST(request: Request) {
   const body = await request.json()
 
   console.log('Proxy Request Body:', body)
 
   try {
-    const response = await axios.post('https://signboard.softacular.net/api/auth/login', body)
+    const response = await axios.post(`${API_BASE}/api/auth/login`, body)
     const data = response.data
 
     console.log('API Response:', data)

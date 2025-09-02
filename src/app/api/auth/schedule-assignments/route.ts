@@ -4,6 +4,8 @@ import { cookies } from 'next/headers'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+import { API_BASE } from '../../../../libs/apiConfig'
+
 
 // ===== Types =====
 type RawSchedule = {
@@ -15,17 +17,42 @@ type RawSchedule = {
 }
 type RawDevice = {
     device_id?: string
+    name?: string
+    platform?: string
+    status?: number
+    is_deleted?: boolean
+    revoked?: boolean
+    created_at?: string
+    updated_at?: string
     schedules_today: RawSchedule | null
     schedules_coming: RawSchedule[]
 }
-type UpstreamResponse = { data: RawDevice[]; message?: string; success?: boolean }
 
-const UPSTREAM = 'https://signboard.softacular.net/api/schedule-assignments'
+type UpstreamPayload = {
+    success?: boolean
+    message?: string
+    data?: {
+        devices?: RawDevice[]
+        page?: number
+        size?: number
+        total_elements?: number
+        total_pages?: number
+        has_next?: boolean
+        has_prev?: boolean
+    }
+}
+
+const UPSTREAM = `${API_BASE}/api/schedule-assignments`
 const HORIZONTAL = { img: '/images/tv/Vector_red.svg', style: 'แนวนอน' }
 
 // ----- helpers -----
-async function fetchUpstream(accessToken: string): Promise<UpstreamResponse> {
-    const res = await fetch(UPSTREAM, {
+async function fetchUpstream(accessToken: string, page = 0, size = 10): Promise<UpstreamPayload> {
+    const url = new URL(UPSTREAM)
+
+    url.searchParams.set('page', String(page))
+    url.searchParams.set('size', String(size))
+
+    const res = await fetch(url.toString(), {
         method: 'GET',
         headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
         cache: 'no-store'
@@ -48,12 +75,11 @@ async function fetchUpstream(accessToken: string): Promise<UpstreamResponse> {
         throw Object.assign(new Error(msg), { status: res.status, body: json })
     }
 
-
     return json
 }
 
-function mapToRows(up: UpstreamResponse) {
-    const devices = Array.isArray(up?.data) ? up.data : []
+function mapToRows(up: UpstreamPayload) {
+    const devices: RawDevice[] = Array.isArray(up?.data?.devices) ? up!.data!.devices! : []
     let id = 1
     const rows: any[] = []
 
@@ -69,7 +95,8 @@ function mapToRows(up: UpstreamResponse) {
                 start_date: s.run_at,
                 end_date: s.run_at_to,
                 direction: HORIZONTAL,
-                status: 'กำลังฉาย'
+                status: 'กำลังฉาย',
+                device_id: d.device_id
             })
         }
 
@@ -83,7 +110,8 @@ function mapToRows(up: UpstreamResponse) {
                     start_date: s.run_at,
                     end_date: s.run_at_to,
                     direction: HORIZONTAL,
-                    status: 'ยังไม่เริ่ม'
+                    status: 'ยังไม่เริ่ม',
+                    device_id: d.device_id
                 })
             }
         }
@@ -95,28 +123,38 @@ function mapToRows(up: UpstreamResponse) {
 async function handle(req: Request) {
     try {
         const url = new URL(req.url)
-        const rawMode = url.searchParams.get('raw') === '1' // <<<< เพิ่มโหมด raw
+        const rawMode = url.searchParams.get('raw') === '1'
+        const page = Number(url.searchParams.get('page') ?? '0')
+        const size = Number(url.searchParams.get('size') ?? '10')
 
-        const headerToken =
-            req.headers.get('authorization')?.replace(/^Bearer\s+/i, '') ||
-            req.headers.get('Authorization')?.replace(/^Bearer\s+/i, '')
-
-        const cookieToken = (await cookies()).get('accessToken')?.value  // <<<< ไม่ต้อง await
-        const accessToken = headerToken || cookieToken
+        // token: header > cookie
+        const headerAuth = req.headers.get('authorization') || req.headers.get('Authorization')
+        const tokenFromHeader = headerAuth?.replace(/^Bearer\s+/i, '')
+        const cookieToken = (await cookies()).get('accessToken')?.value
+        const accessToken = tokenFromHeader || cookieToken
 
         if (!accessToken) {
             return NextResponse.json({ success: false, message: 'Missing access token' }, { status: 401 })
         }
 
-        const upstreamJson = await fetchUpstream(accessToken)
+        const upstreamJson = await fetchUpstream(accessToken, isNaN(page) ? 0 : page, isNaN(size) ? 10 : size)
 
-        // raw=1 → คืนโครงแบบรายอุปกรณ์ (ไว้ merge กับ /api/auth/device)
+        // raw=1 → ส่งคืนตาม upstream (มี devices + meta)
         if (rawMode) return NextResponse.json(upstreamJson, { status: 200 })
 
-        // ค่า default → คืนเป็นแถวพร้อมใช้ในตาราง
-        const mapped = mapToRows(upstreamJson)
+        // ปกติ → แปลงเป็น rows + แนบ meta ไว้ใน data
+        const rows = mapToRows(upstreamJson)
 
-        return NextResponse.json({ success: true, data: mapped }, { status: 200 })
+        const meta = {
+            page: upstreamJson?.data?.page ?? page,
+            size: upstreamJson?.data?.size ?? size,
+            total_elements: upstreamJson?.data?.total_elements ?? rows.length,
+            total_pages: upstreamJson?.data?.total_pages ?? 1,
+            has_next: upstreamJson?.data?.has_next ?? false,
+            has_prev: upstreamJson?.data?.has_prev ?? false
+        }
+
+        return NextResponse.json({ success: true, data: { rows, ...meta } }, { status: 200 })
     } catch (err: any) {
         const status = err?.status || 500
         const message = err?.message || 'Internal error'

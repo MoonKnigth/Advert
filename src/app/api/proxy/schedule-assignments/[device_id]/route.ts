@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server'
 
+import { API_BASE } from '../../../../../libs/apiConfig'
+
 // GET /api/schedule-assignments/[device_id]
 export async function GET(
     request: Request,
@@ -9,7 +11,7 @@ export async function GET(
         const { device_id } = params
 
         // ไปเรียก API backend จริง
-        const response = await fetch(`https://signboard.softacular.net/api/schedule-assignments/${device_id}`, {
+        const response = await fetch(`${API_BASE}/api/schedule-assignments/${device_id}`, {
             headers: {
                 Authorization: request.headers.get('Authorization') || ''
             }

@@ -1,6 +1,8 @@
 // src/app/api/auth/refresh-token/route.ts
 import { NextResponse } from 'next/server'
 
+import { API_BASE } from '../../../../libs/apiConfig'
+
 export async function POST(req: Request) {
     const body = await req.json().catch(() => ({}))
 
@@ -15,7 +17,7 @@ export async function POST(req: Request) {
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
 
     try {
-        const upstream = await fetch('https://signboard.softacular.net/api/auth/refresh-token', {
+        const upstream = await fetch(`${API_BASE}/api/auth/refresh-token`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',

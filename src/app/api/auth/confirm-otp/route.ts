@@ -1,12 +1,17 @@
-import axios from 'axios'
 import { NextResponse } from 'next/server'
+
+import axios from 'axios'
+
+import { API_BASE } from '../../../../libs/apiConfig'
 
 export async function POST(req: Request) {
   const body = await req.json()
+
   console.log('Proxying confirm-otp with body:', body)
 
   try {
-    const response = await axios.post('https://signboard.softacular.net/api/auth/confirm-otp', body)
+    const response = await axios.post(`${API_BASE}/api/auth/confirm-otp`, body)
+
     console.log('API Response:', response.data)
 
     return NextResponse.json(response.data, { status: 200 })

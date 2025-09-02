@@ -4,16 +4,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 
 import Cookies from 'js-cookie'
-import {
-  Button,
-  TextField,
-  Typography,
-  FormControlLabel,
-  Checkbox,
-  Divider,
-  IconButton,
-  InputAdornment
-} from '@mui/material'
+import { Button, TextField, Typography, IconButton, InputAdornment } from '@mui/material'
 import { styled } from '@mui/material/styles'
 import classnames from 'classnames'
 import Alert from '@mui/material/Alert'
@@ -78,11 +69,11 @@ const Login = () => {
         const refreshTokenExpiresAt = data.data.refresh_token_expires_at
 
         // ✅ เรียกข้อมูลจาก API /api/auth/schedule-assignments
-        const scheduleAssignmentsRes = await fetch('/api/auth/schedule-assignments', {
-          method: 'POST',
+        const scheduleAssignmentsRes = await fetch('/api/auth/schedule-assignments?page=0&size=10&raw=1', {
+          method: 'GET',
           headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${accessToken}`
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json'
           }
         })
 
@@ -98,10 +89,10 @@ const Login = () => {
         if (!scheduleAssignmentsRes.ok || !scheduleAssignmentsData?.success) {
           console.warn('Schedule assignments API warning:', scheduleAssignmentsData?.message)
         } else {
-          console.log('Schedule Assignments Data:', scheduleAssignmentsData.data)
+          // console.log('Schedule Assignments Data:', scheduleAssignmentsData.data)
+          const devices = scheduleAssignmentsData?.data?.devices ?? []
 
-          // 👉 ถ้าต้องการเก็บข้อมูลจาก API:
-          localStorage.setItem('scheduleAssignmentsData', JSON.stringify(scheduleAssignmentsData.data))
+          localStorage.setItem('scheduleAssignmentsDevices', JSON.stringify(devices))
         }
 
         // ✅ ตั้ง cookies
@@ -188,9 +179,14 @@ const Login = () => {
                 )
               }}
             />
-            <div className='flex justify-between items-center'>
-              <FormControlLabel control={<Checkbox />} label='Remember me' />
-              <Typography className='text-end' href={'/forgot_password'} color='primary.main' component={Link}>
+            <div className='flex justify-end items-center'>
+              {/* <FormControlLabel control={<Checkbox />} label='Remember me' /> */}
+              <Typography
+                className='text-end'
+                href={'/pages/auth/forgot_password'}
+                color='primary.main'
+                component={Link}
+              >
                 Forgot password?
               </Typography>
             </div>
@@ -202,21 +198,6 @@ const Login = () => {
               <Typography component={Link} href={'/pages/auth/register'} color='primary.main'>
                 Create an account
               </Typography>
-            </div>
-            <Divider className='gap-2 text-textPrimary'>or</Divider>
-            <div className='flex justify-center items-center gap-1.5'>
-              <IconButton className='text-facebook' size='small'>
-                <i className='bx-bxl-facebook-circle' />
-              </IconButton>
-              <IconButton className='text-twitter' size='small'>
-                <i className='bx-bxl-twitter' />
-              </IconButton>
-              <IconButton className='text-textPrimary' size='small'>
-                <i className='bx-bxl-github' />
-              </IconButton>
-              <IconButton className='text-error' size='small'>
-                <i className='bx-bxl-google' />
-              </IconButton>
             </div>
           </form>
         </div>

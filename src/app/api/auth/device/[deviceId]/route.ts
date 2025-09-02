@@ -1,7 +1,11 @@
+// src/app/api/auth/device/[deviceId]/route.ts
+import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server'
 import { cookies } from 'next/headers'
 
-const BASE = process.env.SIGNBOARD_API_BASE ?? 'https://signboard.softacular.net/api'
+import { API_BASE } from '../../../../../libs/apiConfig'
+
+const BASE = API_BASE
 
 type RouteParams = { deviceId: string }
 type RouteContext = { params: Promise<RouteParams> } // <-- params เป็น Promise
@@ -71,5 +75,46 @@ export async function PUT(request: Request, context: RouteContext) {
             { success: false, message: err?.message || 'Upstream request failed', data: null },
             { status: 502 }
         )
+    }
+}
+
+export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+    const { id } = await params
+
+    if (!id) {
+        return NextResponse.json({ success: false, message: 'Missing device id', data: null }, { status: 400 })
+    }
+
+    // รับ token จาก header หรือ cookie
+    const headerAuth = req.headers.get('authorization')
+    const cookieToken = req.cookies.get('accessToken')?.value
+    const authHeader = headerAuth || (cookieToken ? `Bearer ${cookieToken}` : '')
+
+    if (!authHeader) {
+        return NextResponse.json({ success: false, message: 'Unauthorized', data: null }, { status: 401 })
+    }
+
+    try {
+        const upstream = await fetch(`${BASE}/api/device/${encodeURIComponent(id)}`, {
+            method: 'DELETE',
+            headers: { Accept: 'application/json', Authorization: authHeader },
+            cache: 'no-store'
+        })
+
+        // พยายามอ่าน JSON กลับ
+        let data: any = null
+
+        try {
+            data = await upstream.json()
+        } catch {
+            // ถ้าไม่ใช่ JSON ก็ส่งข้อความสั้นๆ กลับแทน
+            data = { success: upstream.ok, message: upstream.statusText, data: null }
+        }
+
+        return NextResponse.json(data, { status: upstream.status })
+    } catch (err) {
+        console.error('DELETE /api/auth/device/[id] error:', err)
+
+        return NextResponse.json({ success: false, message: 'Internal error', data: null }, { status: 500 })
     }
 }

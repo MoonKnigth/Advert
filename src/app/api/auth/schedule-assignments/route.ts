@@ -6,7 +6,6 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 import { API_BASE } from '../../../../libs/apiConfig'
 
-
 // ===== Types =====
 type RawSchedule = {
     schedule_id: number
@@ -167,3 +166,67 @@ async function handle(req: Request) {
 
 export async function GET(req: Request) { return handle(req) }
 export async function POST(req: Request) { return handle(req) }
+
+// ===== NEW: DELETE /api/auth/schedule-assignments =====
+// ส่งต่อไป upstream DELETE /api/schedule-assignments พร้อม Bearer และ JSON body:
+// { device_id: string, schedule_id: string | number }
+export async function DELETE(req: Request) {
+    try {
+        // token: header > cookie
+        const headerAuth = req.headers.get('authorization') || req.headers.get('Authorization')
+        const tokenFromHeader = headerAuth?.replace(/^Bearer\s+/i, '')
+        const cookieToken = (await cookies()).get('accessToken')?.value
+        const accessToken = tokenFromHeader || cookieToken
+
+        if (!accessToken) {
+            return NextResponse.json({ success: false, message: 'Missing access token' }, { status: 401 })
+        }
+
+        // อ่านค่าจาก body หรือ query params (สำรอง)
+        let body: any = {}
+
+        try {
+            body = await req.json()
+        } catch {
+            body = {}
+        }
+
+        const url = new URL(req.url)
+        const deviceFromQuery = url.searchParams.get('device_id') || url.searchParams.get('deviceId')
+        const scheduleFromQuery = url.searchParams.get('schedule_id') || url.searchParams.get('scheduleId')
+
+        const device_id = String(body?.device_id ?? deviceFromQuery ?? '').trim()
+        const schedule_id = String(body?.schedule_id ?? scheduleFromQuery ?? '').trim()
+
+        if (!device_id || !schedule_id) {
+            return NextResponse.json(
+                { success: false, message: 'device_id and schedule_id are required' },
+                { status: 400 }
+            )
+        }
+
+        const upstream = await fetch(UPSTREAM, {
+            method: 'DELETE',
+            headers: {
+                Authorization: `Bearer ${accessToken}`,
+                'Content-Type': 'application/json',
+                Accept: 'application/json'
+            },
+            body: JSON.stringify({ device_id, schedule_id }),
+            cache: 'no-store'
+        })
+
+        const text = await upstream.text()
+        const contentType = upstream.headers.get('content-type') || 'application/json'
+
+        if (!upstream.ok) {
+            console.error('DELETE /schedule-assignments upstream failed', { status: upstream.status, body: text?.slice(0, 400) })
+        }
+
+        return new NextResponse(text, { status: upstream.status, headers: { 'Content-Type': contentType } })
+    } catch (err: any) {
+        console.error('[/api/auth/schedule-assignments:DELETE] exception', err)
+
+        return NextResponse.json({ success: false, message: 'Upstream fetch error' }, { status: 502 })
+    }
+}

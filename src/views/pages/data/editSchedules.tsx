@@ -122,18 +122,9 @@ function parseLocalDateTime(dateTimeString: string): Date | null {
 
 const AppReactDatepicker = dynamic(() => import('@/libs/styles/AppReactDatepicker'), { ssr: false })
 
-// type MediaItem = {
-//   id: number
-//   title: string
-//   type: 'video' | 'image'
-//   status: number | null
-//   fileUrl: string | null
-//   thumbnailUrl: string | null
-//   duration: number | null
-//   fileSize: number | null
-//   aspectRatio: string | null
-//   description?: string | null
-// }
+type MediaType = 'video' | 'image'
+
+type MediaIndexEntry = { type: MediaType; page0: number }
 type Props = {
   activeStep: number
   handlePrev: () => void
@@ -254,6 +245,76 @@ const EditSchedulesContent = ({
 
   // ✅ NEW: cache สะสมทุกหน้าที่โหลด (id -> item) เพื่อส่ง selectedOldFiles ข้ามหน้าได้
   const mediaCacheRef = useRef<Map<number, MediaItem>>(new Map())
+  const mediaMetaRef = useRef<Map<number, MediaIndexEntry>>(new Map())
+  const isScanningRef = useRef(false)
+
+  // const indexOnly = (items: any[], type: MediaType, page0: number) => {
+  //   items.forEach(raw => {
+  //     const id = raw?.id as number
+
+  //     if (!id) return
+  //     mediaMetaRef.current.set(id, { type, page0 })
+  //   })
+  // }
+
+  // const hydratePage = async (type: MediaType, page0: number) => {
+  //   const res = await fetch(`/api/auth/media?page=${page0}&size=100&type=${type}`)
+
+  //   if (!res.ok) return
+  //   const json = await res.json()
+  //   const list = json?.data?.media ?? []
+
+  //   list.forEach((raw: any) => {
+  //     const item = normalize(raw)
+
+  //     mediaCacheRef.current.set(item.id, item) // ✅ ตัวเต็ม
+  //     mediaMetaRef.current.set(item.id, { type, page0 }) // sync meta
+  //   })
+  // }
+
+  const findIdsMetaOnDemand = useCallback(async (ids: number[]) => {
+    const unknown = ids.filter(id => !mediaMetaRef.current.has(id))
+
+    if (unknown.length === 0) return
+    if (isScanningRef.current) return
+    isScanningRef.current = true
+
+    try {
+      const target = new Set(unknown)
+      const size = 100
+
+      for (const type of ['video', 'image'] as const) {
+        if (target.size === 0) break
+        let page = 0
+        let hasNext = true
+
+        while (hasNext && target.size > 0) {
+          const res = await fetch(`/api/auth/media?page=${page}&size=${size}&type=${type}`)
+
+          if (!res.ok) break
+          const json = await res.json()
+          const list = json?.data?.media ?? []
+
+          list.forEach((raw: any) => {
+            const item = normalize(raw) // ✅ FIX
+
+            mediaCacheRef.current.set(item.id, item) // ✅ FIX
+            mediaMetaRef.current.set(item.id, { type, page0: json?.data?.page ?? page })
+            if (target.has(item.id)) target.delete(item.id)
+          })
+
+          hasNext = !!json?.data?.has_next
+          page += 1
+        }
+      }
+
+      if (target.size > 0) {
+        console.warn('🟨 Not found in any page/type:', Array.from(target))
+      }
+    } finally {
+      isScanningRef.current = false
+    }
+  }, [])
 
   const fetchStorageUsage = useCallback(async () => {
     try {
@@ -282,21 +343,36 @@ const EditSchedulesContent = ({
   useEffect(() => {
     ;(initialSelectedOldFiles ?? []).forEach(item => {
       mediaCacheRef.current.set(item.id, item)
+
+      if (!mediaMetaRef.current.has(item.id)) {
+        mediaMetaRef.current.set(item.id, { type: item.type, page0: -1 }) // ไม่รู้หน้า
+      }
     })
   }, [initialSelectedOldFiles])
+
+  const logSelectedDetails = useCallback(() => {
+    const rows = selected.map(id => {
+      const item = mediaCacheRef.current.get(id)
+      const meta = mediaMetaRef.current.get(id)
+
+      return {
+        id,
+        title: item?.title ?? '(unknown)',
+        type: item?.type ?? meta?.type ?? '(unknown)',
+        page: meta ? (meta.page0 >= 0 ? meta.page0 + 1 : '(unknown)') : '(unknown)' // แสดง 1-based
+      }
+    })
+
+    console.table(rows)
+  }, [selected])
+
+  useEffect(() => {
+    logSelectedDetails()
+  }, [logSelectedDetails])
 
   useEffect(() => {
     fetchStorageUsage()
   }, [fetchStorageUsage])
-
-  useEffect(() => {
-    // เปิดโซนคลังอัตโนมัติ
-    if (!showOldFiles) setShowOldFiles(true)
-
-    // โหลดวิดีโอหน้าแรก
-    fetchOldFilesPage(0, 'video')
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
 
   // ใน EditSchedulesContent (child)
   useEffect(() => {
@@ -308,6 +384,29 @@ const EditSchedulesContent = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  const logSelectedDetailsDeep = useCallback(async () => {
+    // selected คือ [327, 39, 38, 28, ...]
+    await findIdsMetaOnDemand(selected)
+
+    const rows = selected.map(id => {
+      const item = mediaCacheRef.current.get(id)
+      const meta = mediaMetaRef.current.get(id)
+
+      return {
+        id,
+        title: item?.title ?? '(unknown)',
+        type: item?.type ?? meta?.type ?? '(unknown)',
+        page: meta ? meta.page0 + 1 : '(unknown)' // แสดง 1-based ให้อ่านง่าย
+      }
+    })
+
+    console.table(rows)
+  }, [selected, findIdsMetaOnDemand])
+
+  useEffect(() => {
+    logSelectedDetailsDeep()
+  }, [logSelectedDetailsDeep])
+
   // ===== Orientation =====
   const handleOrientationChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const value = event.target.value as 'landscape' | 'portrait'
@@ -316,17 +415,17 @@ const EditSchedulesContent = ({
   }
 
   // ✅ NEW: แปลง snake_case → camelCase + เติม default
-  const normalizeMedia = (m: any): MediaItem => ({
-    id: Number(m?.id),
-    title: String(m?.title ?? ''),
-    type: (m?.type === 'video' ? 'video' : 'image') as 'video' | 'image',
-    status: Number.isFinite(m?.status) ? Number(m?.status) : 1,
-    fileUrl: m?.file_url ?? null,
-    thumbnailUrl: m?.thumbnail_url ?? null,
-    duration: m?.duration ?? null,
-    fileSize: m?.file_size ?? null,
-    aspectRatio: m?.aspect_ratio ?? null,
-    description: m?.description ?? null
+  const normalize = (raw: any): MediaItem => ({
+    id: raw.id,
+    title: raw.title ?? '',
+    type: raw.type,
+    status: raw.status ?? 1, // หรือ 0 แล้วแต่สเปคใน libs
+    fileUrl: raw.file_url ?? '',
+    thumbnailUrl: raw.thumbnail_url ?? null,
+    duration: raw.duration ?? null,
+    fileSize: raw.file_size ?? null,
+    aspectRatio: raw.aspect_ratio ?? null,
+    description: raw.description ?? '' // ถ้าใน type เป็น optional ให้ใส่ได้
   })
 
   // ✅ NEW: เรียก API ตามแท็บ + เพจ (0-based)
@@ -338,14 +437,17 @@ const EditSchedulesContent = ({
 
       const json = await res.json()
       const rawArr = json?.data?.media ?? []
-      const normalized: MediaItem[] = rawArr.map(normalizeMedia)
+      const normalized: MediaItem[] = rawArr.map(normalize) // ✅ FIX
 
-      normalized.forEach(item => mediaCacheRef.current.set(item.id, item))
+      normalized.forEach(item => {
+        mediaCacheRef.current.set(item.id, item)
+        mediaMetaRef.current.set(item.id, { type, page0: page })
+      })
 
       setOldFiles(normalized)
       setMediaTotalPages(Number(json?.data?.total_pages ?? 1))
       setMediaTotalElements(Number(json?.data?.total_elements ?? normalized.length))
-      setMediaPage(Number(json?.data?.page ?? page)) // 0-based
+      setMediaPage(Number(json?.data?.page ?? page))
     },
     [mediaSize, tabValue, setOldFiles]
   )
@@ -524,6 +626,8 @@ const EditSchedulesContent = ({
 
   const videoFilesSorted = useMemo(() => withSelectedFirst(videoFiles), [videoFiles, withSelectedFirst])
   const imageFilesSorted = useMemo(() => withSelectedFirst(imageFiles), [imageFiles, withSelectedFirst])
+
+  // console.log(selected)
 
   // ===== Render =====
   return (
@@ -791,6 +895,9 @@ const EditSchedulesContent = ({
         <Typography variant='h5' component='h3' sx={{ color: 'text.primary', mb: 2 }}>
           <strong>กำหนดชื่อกำหนดการโฆษณา</strong>
         </Typography>
+        <Button variant='outlined' onClick={logSelectedDetailsDeep}>
+          Log Selected (deep scan)
+        </Button>
       </Grid>
 
       <Grid size={{ xs: 12, md: 6 }}>

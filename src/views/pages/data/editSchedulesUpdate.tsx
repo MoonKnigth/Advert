@@ -785,7 +785,7 @@ const EditSchedulesUpdate = ({
                         }}
                         title={image.name}
                       >
-                        {truncate(image.name, 28)}
+                        {truncate(image.name, 25)}
                       </Typography>
 
                       <CardMedia
@@ -819,7 +819,7 @@ const EditSchedulesUpdate = ({
                   <Grid size={{ xs: 12, md: 3 }} key={`old-image-${image.id}`}>
                     <Box display='flex' flexDirection='column' sx={{ alignItems: 'center' }}>
                       <Typography variant='body2' sx={{ textAlign: 'center', mb: 1 }} title={image.title}>
-                        {truncate(image.title, 28)}
+                        {truncate(image.title, 25)}
 
                         {/* {image.title} */}
                       </Typography>

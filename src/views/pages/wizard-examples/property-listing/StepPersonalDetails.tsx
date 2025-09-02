@@ -31,7 +31,8 @@ import {
   CardMedia,
   ListItemIcon,
   ListItemText,
-  IconButton
+  IconButton,
+  CircularProgress
 } from '@mui/material'
 import Cookies from 'js-cookie'
 
@@ -235,7 +236,7 @@ const ScheduleRow = memo(function ScheduleRow({ data, variant = 'coming', onOpen
       </div>
 
       <i
-        className='bx bx-trash text-primary cursor-pointer'
+        className='bx bx-trash text-primary cursor-pointer size-5 mr-5'
         onClick={e => {
           e.stopPropagation()
           onDelete(data.schedule_id)
@@ -258,7 +259,12 @@ const DeviceGrid = memo(function DeviceGrid({
   onToggleDevice,
   onOpenDevice
 }: DeviceGridProps) {
-  if (!Array.isArray(deviceInfo)) return <p>กำลังโหลดข้อมูล...</p>
+  if (!Array.isArray(deviceInfo))
+    return (
+      <div style={{ display: 'flex', justifyContent: 'center' }}>
+        <CircularProgress />
+      </div>
+    )
   if (deviceInfo.length === 0) return <p>ยังไม่มีอุปกรณ์</p>
 
   return (
@@ -756,6 +762,7 @@ const ScheduleDetailDialog = memo(function ScheduleDetailDialog({
                         </CustomAvatar>
 
                         <div className='flex flex-col flex-1'>
+                          {/* <p>{item.id}</p> */}
                           <Typography
                             variant='subtitle1'
                             sx={{ fontWeight: 600, lineHeight: 1.2 }}
@@ -798,7 +805,9 @@ const ScheduleDetailDialog = memo(function ScheduleDetailDialog({
             </CardContent>
           </CardContent>
         ) : (
-          <Typography>กำลังโหลด...</Typography>
+          <div style={{ display: 'flex', justifyContent: 'center' }}>
+            <CircularProgress />
+          </div>
         )}
       </DialogContent>
     </Dialog>
@@ -848,9 +857,12 @@ const AssetPreviewDialog = memo(function AssetPreviewDialog({
       </Box>
 
       <DialogContent sx={{ mt: 1, minHeight: { xs: '60vh', md: 550 } }}>
-        {loading && <Typography>กำลังโหลด...</Typography>}
+        {loading && (
+          <div style={{ display: 'flex', justifyContent: 'center' }}>
+            <CircularProgress />
+          </div>
+        )}{' '}
         {error && <Alert severity='error'>{error}</Alert>}
-
         {!loading && !error && src && type === 'image' && (
           <Box sx={{ width: '100%', display: 'flex', justifyContent: 'center' }}>
             <CardMedia
@@ -861,7 +873,6 @@ const AssetPreviewDialog = memo(function AssetPreviewDialog({
             />
           </Box>
         )}
-
         {!loading && !error && src && type === 'video' && (
           <video controls width='100%' style={{ maxHeight: 480 }} autoPlay>
             <source src={src} type='video/mp4' />
@@ -1173,11 +1184,61 @@ const StepPersonalDetails = ({
     setOpenDialog(true)
   }, [])
 
-  const handleRemoveSchedule = useCallback((scheduleId: number, scheduleType: 'today' | 'coming') => {
-    console.log(`🗑️ ลบ ${scheduleType} schedule ID: ${scheduleId}`)
+  const [, setDeletingId] = useState<number | null>(null)
 
-    // TODO: เรียก API เพื่อลบ schedule
-  }, [])
+  const handleRemoveSchedule = useCallback(
+    async (scheduleId: number, scheduleType: 'today' | 'coming') => {
+      try {
+        if (!selectedDevice?.device_id) {
+          alert('ไม่พบ Device ID')
+
+          return
+        }
+
+        if (!confirm(`ยืนยันลบกำหนดการ ${scheduleId} ออกจากอุปกรณ์ ${selectedDevice.device_id}?`)) return
+
+        setDeletingId(scheduleId)
+
+        const res = await fetch('/api/auth/schedule-assignments', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            device_id: selectedDevice.device_id,
+            schedule_id: String(scheduleId)
+          })
+        })
+
+        const json = await res.json().catch(() => ({}))
+
+        if (!res.ok || json?.success === false) {
+          throw new Error(json?.message || `Delete failed (${res.status})`)
+        }
+
+        // ✅ ลบสำเร็จ → อัปเดต UI ใน dialog ให้หายไปทันที
+        setSelectedDevice((prev: any) => {
+          if (!prev) return prev
+          const next: any = { ...prev }
+
+          if (scheduleType === 'today') {
+            next.schedules_today = null
+          } else if (Array.isArray(next.schedules_coming)) {
+            next.schedules_coming = next.schedules_coming.filter(
+              (s: any) => Number(s.schedule_id) !== Number(scheduleId)
+            )
+          }
+
+          return next
+        })
+
+        alert('Delete success') // ✅ ตามที่ต้องการ
+      } catch (e: any) {
+        alert(e?.message || 'ลบไม่สำเร็จ')
+      } finally {
+        setDeletingId(null)
+      }
+    },
+    [selectedDevice]
+  )
 
   const fetchScheduleDetail = useCallback(async (scheduleId: number | string) => {
     try {
@@ -1200,6 +1261,115 @@ const StepPersonalDetails = ({
     }
   }, [])
 
+  // ดึง 1 หน้า พร้อมแปลงเป็น MediaItem[]
+  async function fetchMediaPage(
+    type: 'video' | 'image',
+    page = 0,
+    size = 100,
+    token?: string
+  ): Promise<{ list: MediaItem[]; totalPages: number }> {
+    const res = await fetch(`/api/auth/media?page=${page}&size=${size}&type=${type}`, {
+      headers: {
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        'Content-Type': 'application/json'
+      }
+    })
+
+    const json = await res.json().catch(() => ({}))
+
+    const rawList = Array.isArray(json?.data?.media) ? json.data.media : extractMediaArray(json)
+    const list: MediaItem[] = (rawList || []).map(normalizeMedia)
+    const totalPages = Number(json?.data?.total_pages ?? 1)
+
+    return { list, totalPages }
+  }
+
+  // สแกน on-demand ทุกหน้า ทั้ง video และ image เพื่อหา media ที่ตรงกับ adsItem
+  async function findMediaOnDemand(item: AdsItem): Promise<{ media?: MediaItem; matchedBy?: string }> {
+    const token = Cookies.get('accessToken')
+
+    // 0) ถ้า adsItem มี URL ตรง ๆ ก็ใช้เลย
+    const anyItem = item as any
+
+    const directUrl =
+      anyItem?.fileUrl || anyItem?.file_url || anyItem?.url || anyItem?.thumbnail_url || anyItem?.thumbnailUrl
+
+    if (directUrl) {
+      return {
+        media: {
+          id: Number(anyItem?.id ?? anyItem?.media_id ?? anyItem?.mediaId ?? 0),
+          title: anyItem?.title ?? anyItem?.name ?? '',
+          type: String(item.type).toLowerCase() === 'video' ? 'video' : 'image',
+          description: anyItem?.description ?? '',
+          fileUrl: String(directUrl),
+          thumbnailUrl: anyItem?.thumbnail_url ?? anyItem?.thumbnailUrl ?? null,
+          duration: anyItem?.duration != null ? Number(anyItem.duration) : null,
+          width: anyItem?.width ?? null,
+          height: anyItem?.height ?? null,
+          aspectRatio: anyItem?.aspect_ratio ?? null,
+          fileSize: anyItem?.file_size ?? null,
+          status: 1,
+          videoType: anyItem?.mime ?? null
+        } as MediaItem & { aspectRatio: string | null },
+        matchedBy: 'adsItem.file_url'
+      }
+    }
+
+    const itemType: 'video' | 'image' = String(item.type).toLowerCase() === 'video' ? 'video' : 'image'
+    const wantedId = Number((item as any).mediaId ?? (item as any).media_id ?? item.id)
+
+    for (const type of [itemType, itemType === 'video' ? 'image' : 'video'] as const) {
+      // เผื่อ type ใน adsItem ไม่ตรง
+      let page = 0
+      let total = 1
+      let bestTitleMatch: MediaItem | undefined
+      let bestDiff = Number.POSITIVE_INFINITY
+
+      do {
+        const { list, totalPages } = await fetchMediaPage(type, page, 100, token)
+
+        total = totalPages
+
+        // 1) id / media_id
+        let m = list.find(m => Number(m.id) === Number(wantedId))
+
+        if (!m && (item as any).mediaId != null) {
+          m = list.find(mm => Number(mm.id) === Number((item as any).mediaId))
+        }
+
+        if (m) return { media: m, matchedBy: `scan:${type}:id` }
+
+        // 2) title+type(+duration)
+        const itemTitleKey = normalizeTitle(item.title)
+        const cand = list.filter(mm => normalizeTitle(mm.title) === itemTitleKey)
+
+        if (cand.length) {
+          if (type === 'video' && item.duration != null) {
+            const target = Number(item.duration)
+
+            for (const c of cand) {
+              const diff = Math.abs((c.duration ?? target) - target)
+
+              if (diff < bestDiff) {
+                bestDiff = diff
+                bestTitleMatch = c
+              }
+            }
+          } else if (!bestTitleMatch) {
+            bestTitleMatch = cand[0]
+            bestDiff = 0
+          }
+        }
+
+        page += 1
+      } while (page < total)
+
+      if (bestTitleMatch) return { media: bestTitleMatch, matchedBy: `scan:${type}:title(+duration)` }
+    }
+
+    return { media: undefined, matchedBy: undefined }
+  }
+
   const openAssetByAdsItem = useCallback(
     async (item: AdsItem) => {
       setOpenAssetDialog(true)
@@ -1210,59 +1380,18 @@ const StepPersonalDetails = ({
       setAssetType(null)
 
       try {
-        // eslint-disable-next-line prefer-const
+        // ลองจากแคชในหน้า (mediaList) ก่อน
         let { media, matchedBy } = resolveMediaForItem(item)
 
+        // ไม่เจอ → สแกนทุกหน้า ทั้ง video/image และรองรับ file_url ตรง ๆ
         if (!media) {
-          const accessToken = Cookies.get('accessToken')
+          const found = await findMediaOnDemand(item)
 
-          if (!accessToken) throw new Error('ไม่พบ Access Token')
-
-          const res = await fetch('/api/auth/media', {
-            method: 'GET',
-            headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' }
-          })
-
-          if (!res.ok) throw new Error(`API Error: ${res.status}`)
-          const result = await res.json()
-          const rawList = extractMediaArray(result)
-          const list: MediaItem[] = rawList.map(normalizeMedia)
-
-          // 1) id
-          media = list.find(m => String(m.id) === String(item.id))
-
-          if (!media) {
-            // 2) mediaId/media_id
-            const anyItem = item as any
-            const mid: number | string | undefined = anyItem.mediaId ?? anyItem.media_id
-
-            if (mid != null) media = list.find(m => String(m.id) === String(mid))
-          }
-
-          // 3) title+type(+duration)
-          if (!media) {
-            const itemTitle = normalizeTitle(item.title)
-            const itemType = String(item.type).toLowerCase() === 'video' ? 'video' : 'image'
-            const candidates = list.filter(m => normalizeTitle(m.title) === itemTitle && m.type === itemType)
-
-            if (candidates.length > 0) {
-              if (itemType === 'video' && item.duration != null) {
-                const target = Number(item.duration)
-
-                media = candidates.reduce((best, c) => {
-                  const diff = Math.abs((c.duration ?? target) - target)
-                  const bestDiff = Math.abs((best.duration ?? target) - target)
-
-                  return diff < bestDiff ? c : best
-                }, candidates[0])
-              } else {
-                media = candidates[0]
-              }
-            }
-          }
-
-          console.log('[openAssetByAdsItem] matched fallback:', matchedBy, media?.id)
+          media = found.media
+          matchedBy = found.matchedBy
         }
+
+        console.log('[openAssetByAdsItem] matchedBy=', matchedBy, 'mediaId=', media?.id)
 
         if (!media) throw new Error('ไม่พบไฟล์สื่อที่ตรงกับรายการนี้')
         if (!media.fileUrl) throw new Error('ไฟล์ไม่มี URL')

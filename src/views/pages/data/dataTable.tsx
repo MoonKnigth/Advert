@@ -15,7 +15,9 @@ import { styled } from '@mui/material/styles'
 import type { CardProps } from '@mui/material/Card'
 import CardHeader from '@mui/material/CardHeader'
 import {
+  Alert,
   Box,
+  Button,
   CardContent,
   Chip,
   CircularProgress,
@@ -25,7 +27,8 @@ import {
   IconButton,
   MenuItem,
   Pagination,
-  Typography
+  Typography,
+  Snackbar
 } from '@mui/material'
 import Grid from '@mui/material/Grid2'
 
@@ -167,6 +170,65 @@ const DataTable: React.FC = () => {
   // ✅ summary totals (นับจาก "ทั้งหมด" ไม่ใช่เฉพาะหน้าปัจจุบัน)
   const [summary, setSummary] = useState({ total: 0, playing: 0, upcoming: 0, expired: 0 })
   const [summaryLoading, setSummaryLoading] = useState(false)
+
+  const [deleteTarget, setDeleteTarget] = useState<null | RowType>(null)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string>('')
+
+  const [toast, setToast] = useState<{ open: boolean; msg: string; severity: 'success' | 'error' }>({
+    open: false,
+    msg: '',
+    severity: 'success'
+  })
+
+  // เปิด confirm โดยเก็บ id (และข้อมูลแถว) ไว้
+  const promptDelete = (row: RowType) => {
+    setDeleteError('')
+    setDeleteTarget(row) // ✅ เก็บ schedule_id ไว้ใน state
+  }
+
+  // ยิงลบจริง
+  const confirmDelete = async () => {
+    if (!deleteTarget) return
+    const sid = deleteTarget.schedule_id
+
+    setDeleting(true)
+    setDeleteError('')
+
+    try {
+      const token = Cookies.get('accessToken')
+
+      const res = await fetch(`/api/schedules/${encodeURIComponent(String(sid))}`, {
+        method: 'DELETE',
+        headers: token ? { Authorization: `Bearer ${token}` } : {}
+      })
+
+      const text = await res.text()
+
+      if (!res.ok) throw new Error(text || `HTTP ${res.status}`)
+
+      // ลบสำเร็จ → รีเฟรชตารางหน้าปัจจุบัน
+      // กรณีหน้าเพจว่างหลังลบ ให้ถอยกลับหน้าก่อนหน้า
+      await fetchScheduleList(currentPage, rowsPerPage)
+
+      // ถ้าหน้าปัจจุบันว่าง และ currentPage > 1 → ย้อนกลับหน้าก่อนแล้วโหลดใหม่
+
+      setTimeout(async () => {
+        const hasRows = table.getRowModel().rows.length > 0
+
+        if (!hasRows && currentPage > 1) {
+          await fetchScheduleList(currentPage - 1, rowsPerPage)
+        }
+      }, 0)
+      setDeleteTarget(null)
+      setToast({ open: true, msg: 'ลบสําเร็จ', severity: 'success' })
+    } catch (e: any) {
+      setDeleteError(e?.message || 'ลบไม่สำเร็จ')
+      setToast({ open: true, msg: 'Delete failed', severity: 'error' })
+    } finally {
+      setDeleting(false)
+    }
+  }
 
   const openEdit = (row: RowType) => {
     setEditRow(row)
@@ -511,7 +573,12 @@ const DataTable: React.FC = () => {
               >
                 <i className='bx-edit' />
               </CustomIconButton>
-              <CustomIconButton aria-label='delete campaign' color='error' variant='tonal'>
+              <CustomIconButton
+                aria-label='delete campaign'
+                color='error'
+                variant='tonal'
+                onClick={() => promptDelete(row)} // ✅ เก็บ schedule_id เข้าสตท.
+              >
                 <i className='bx-trash' />
               </CustomIconButton>
             </div>
@@ -894,6 +961,54 @@ const DataTable: React.FC = () => {
           )}
         </DialogContent>
       </Dialog>
+
+      <Dialog open={!!deleteTarget} onClose={() => (!deleting ? setDeleteTarget(null) : null)} maxWidth='xs' fullWidth>
+        <DialogTitle>ยืนยันการลบกำหนดการ</DialogTitle>
+        <DialogContent dividers>
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <Typography>ต้องการลบกำหนดการนี้หรือไม่?</Typography>
+            <Typography variant='body2' color='text.secondary'>
+              ID: <strong>{deleteTarget?.schedule_id}</strong>
+              {deleteTarget?.name ? (
+                <>
+                  {' '}
+                  • ชื่อ: <strong>{deleteTarget?.name}</strong>
+                </>
+              ) : null}
+            </Typography>
+
+            {deleteError && (
+              <Alert severity='error' variant='filled'>
+                {deleteError}
+              </Alert>
+            )}
+
+            <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 2, mt: 1 }}>
+              <Button onClick={() => setDeleteTarget(null)} disabled={deleting}>
+                ยกเลิก
+              </Button>
+              <Button color='error' variant='contained' onClick={confirmDelete} disabled={deleting}>
+                {deleting ? 'กำลังลบ…' : 'ลบ'}
+              </Button>
+            </Box>
+          </Box>
+        </DialogContent>
+      </Dialog>
+      <Snackbar
+        open={toast.open}
+        autoHideDuration={3000}
+        onClose={() => setToast((t: typeof toast) => ({ ...t, open: false }))}
+        anchorOrigin={{ vertical: 'top', horizontal: 'right' }}
+      >
+        <Alert
+          onClose={() => setToast((t: typeof toast) => ({ ...t, open: false }))}
+          severity={toast.severity}
+          variant='filled'
+          sx={{ width: '100%' }}
+        >
+          {toast.msg}
+        </Alert>
+      </Snackbar>
     </div>
   )
 }

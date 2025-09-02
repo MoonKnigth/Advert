@@ -38,7 +38,7 @@ export async function PUT(request: Request, context: RouteContext) {
     const timeout = setTimeout(() => controller.abort(), 10000)
 
     try {
-        const res = await fetch(`${BASE}/device/${encodeURIComponent(deviceId)}`, {
+        const res = await fetch(`${BASE}/api/device/${encodeURIComponent(deviceId)}`, {
             method: 'PUT',
             headers: {
                 Authorization: `Bearer ${token}`,

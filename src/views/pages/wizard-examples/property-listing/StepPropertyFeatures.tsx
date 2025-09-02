@@ -684,7 +684,7 @@ const StepPropertyFeatures = ({
         </Box>
 
         <Typography variant='body2' sx={{ fontWeight: 500 }}>
-          ขั้นตอนที่ {loadingState.currentStep} จาก {loadingState.totalSteps}
+          ขั้นตอนที่ {loadingState.currentStep} / {loadingState.totalSteps}
           {loadingState.isCompleted && loadingState.isSuccess && (
             <Icon icon='mdi:check-circle' style={{ marginLeft: 8, verticalAlign: 'middle' }} />
           )}
@@ -693,7 +693,7 @@ const StepPropertyFeatures = ({
         <Box mt={2}>
           <Typography variant='caption' color='text.secondary'>
             {uploadedFiles.length > 0
-              ? 'อัปโหลดไฟล์ → สร้าง Schedule → มอบหมาย Device'
+              ? 'อัปโหลดไฟล์ → สร้างกำหนดการ → มอบหมาย Device'
               : 'สร้าง Schedule → มอบหมาย Device'}
           </Typography>
         </Box>

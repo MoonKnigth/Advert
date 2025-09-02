@@ -95,42 +95,42 @@ const normalizeMedia = (m: any): MediaItem => {
   }
 }
 
-type ServerMediaResponse = {
-  success?: boolean
-  data?: {
-    media?: any[]
-    page?: number // 0-based (ของ server)
-    size?: number // server page size ที่แท้จริง
-    total_elements?: number
-    total_pages?: number
-  }
-}
+// type ServerMediaResponse = {
+//   success?: boolean
+//   data?: {
+//     media?: any[]
+//     page?: number // 0-based (ของ server)
+//     size?: number // server page size ที่แท้จริง
+//     total_elements?: number
+//     total_pages?: number
+//   }
+// }
 
-const fetchServerMediaPage = async (
-  p: number,
-  size: number,
-  type: 'video' | 'image',
-  token?: string
-): Promise<{ list: any[]; meta: NonNullable<ServerMediaResponse['data']> }> => {
-  const res = await fetch(`/api/auth/media?page=${p}&size=${size}&type=${type}`, {
-    method: 'GET',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {})
-    },
-    credentials: 'include',
-    cache: 'no-store'
-  })
+// const fetchServerMediaPage = async (
+//   p: number,
+//   size: number,
+//   type: 'video' | 'image',
+//   token?: string
+// ): Promise<{ list: any[]; meta: NonNullable<ServerMediaResponse['data']> }> => {
+//   const res = await fetch(`/api/auth/media?page=${p}&size=${size}&type=${type}`, {
+//     method: 'GET',
+//     headers: {
+//       'Content-Type': 'application/json',
+//       ...(token ? { Authorization: `Bearer ${token}` } : {})
+//     },
+//     credentials: 'include',
+//     cache: 'no-store'
+//   })
 
-  const text = await res.text()
+//   const text = await res.text()
 
-  if (!res.ok) throw new Error(text || `HTTP ${res.status}`)
-  const json = (text ? JSON.parse(text) : {}) as ServerMediaResponse
-  const meta = json.data || {}
-  const arr = Array.isArray(meta.media) ? meta.media : []
+//   if (!res.ok) throw new Error(text || `HTTP ${res.status}`)
+//   const json = (text ? JSON.parse(text) : {}) as ServerMediaResponse
+//   const meta = json.data || {}
+//   const arr = Array.isArray(meta.media) ? meta.media : []
 
-  return { list: arr, meta }
-}
+//   return { list: arr, meta }
+// }
 
 export default function MediaPage() {
   const theme = useTheme()
@@ -193,7 +193,7 @@ export default function MediaPage() {
     }
   })
 
-  const handleChange = (event: SyntheticEvent, newValue: string) => {
+  const handleChange = (event: SyntheticEvent, newValue: '1' | '2') => {
     setValue(newValue)
     setSelected([])
   }
@@ -855,7 +855,9 @@ export default function MediaPage() {
 
                           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                             <Typography variant='caption'>{formatFileSize(item.fileSize)}</Typography>
-                            <Typography variant='caption'>Size : {item.aspectRatio} px</Typography>
+                            {item.type === 'video' ? (
+                              <Typography variant='caption'>Size : {item.aspectRatio} px</Typography>
+                            ) : null}
                           </Box>
                         </CardContent>
                       </Card>

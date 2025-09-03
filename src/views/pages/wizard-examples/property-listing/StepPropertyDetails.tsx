@@ -220,6 +220,30 @@ const StepPropertyDetails = ({
   const [editingIndex, setEditingIndex] = useState<number | null>(null)
   const [newFileName, setNewFileName] = useState<string>('')
 
+  // ⬇️ Alert ลอย Top-Center
+  const [topAlert, setTopAlert] = useState<{
+    open: boolean
+    msg: string
+    sev: 'success' | 'error' | 'warning' | 'info'
+  }>({ open: false, msg: '', sev: 'warning' })
+
+  const alertTimerRef = useRef<number | null>(null)
+
+  const showTopAlert = useCallback((msg: string, sev: 'success' | 'error' | 'warning' | 'info' = 'warning') => {
+    setTopAlert({ open: true, msg, sev })
+    if (alertTimerRef.current) window.clearTimeout(alertTimerRef.current)
+    alertTimerRef.current = window.setTimeout(
+      () => setTopAlert(s => ({ ...s, open: false })),
+      4000
+    ) as unknown as number
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      if (alertTimerRef.current) window.clearTimeout(alertTimerRef.current)
+    }
+  }, [])
+
   // แยกตาม type จาก oldFiles (ถ้าเก็บแยกอยู่แล้ว ข้ามสองบรรทัดนี้)
   const videoFiles = oldFiles.filter(f => f.type === 'video')
   const imageFiles = oldFiles.filter(f => f.type === 'image')
@@ -526,7 +550,20 @@ const StepPropertyDetails = ({
                 )}
               </Box>
               <CardContent sx={{ flexGrow: 1 }}>
-                <Typography /* ...เหมือนเดิม... */ title={item.title}>{item.title}</Typography>
+                <Typography
+                  variant='h6'
+                  sx={{
+                    fontSize: '1rem',
+                    fontWeight: 600,
+                    mb: 1,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap'
+                  }}
+                  title={item.title}
+                >
+                  {item.title}
+                </Typography>
               </CardContent>
             </Card>
           </Grid>
@@ -555,25 +592,25 @@ const StepPropertyDetails = ({
 
   const isAllowedChunk = (s: string) => /^[\p{L}\p{N}\p{M} _-]+$/u.test(s)
 
-  // กันตั้งแต่ตอน “กำลังพิมพ์” (block char ที่ไม่อนุญาต)
+  // ก่อนพิมพ์: บล็อกอักขระที่ไม่อนุญาต
   const handleNameBeforeInput = (e: React.FormEvent<HTMLInputElement>) => {
-    const data = (e.nativeEvent as InputEvent).data // อักขระที่จะถูกแทรก
+    const data = (e.nativeEvent as InputEvent).data
 
-    if (!data) return // เช่น ลบ/ลูกศร/คีย์ควบคุม
+    if (!data) return
 
     if (!isAllowedChunk(data)) {
       e.preventDefault()
-      alert('อนุญาตเฉพาะ ตัวอักษรทุกภาษา, ตัวเลข, เว้นวรรค, _ และ -')
+      showTopAlert('อนุญาตเฉพาะตัวอักษรทุกภาษา/ตัวเลข และสัญลักษณ์: เว้นวรรค, _ , -', 'warning')
     }
   }
 
-  // คุมซ้ำตอนมีการเปลี่ยนค่า (เช่น paste) — sanitize แล้วแจ้งเตือนถ้ามีการตัดทิ้ง
+  // ตอนเปลี่ยนค่า: sanitize ถ้ามีตัวที่ไม่อนุญาต (แทน alert เดิม)
   const handleAdNameChange = (e: ChangeEvent<HTMLInputElement>) => {
     const raw = e.target.value
     const clean = sanitizeName(raw)
 
     if (raw !== clean) {
-      alert('มีอักขระที่ไม่อนุญาต ระบบได้ลบออกให้อัตโนมัติ')
+      showTopAlert('ลบอักขระที่ไม่อนุญาตออกให้อัตโนมัติ', 'info')
     }
 
     setAdName(clean)
@@ -624,14 +661,24 @@ const StepPropertyDetails = ({
   }
 
   const handleNextWithValidation = () => {
-    if (!adName.trim()) {
-      alert('กรุณากรอกชื่อกำหนดการ')
+    const msgs: string[] = []
 
-      return
+    // 1) ต้องมีไฟล์อย่างน้อย 1 (จากคลังหรืออัปโหลด)
+    if (uploadedFiles.length === 0 && selected.length === 0) {
+      msgs.push('กรุณาเลือกไฟล์อย่างน้อย 1 ไฟล์ (จากคลังหรืออัปโหลด)')
     }
 
-    if (uploadedFiles.length === 0 && selected.length === 0) {
-      alert('กรุณาอัพโหลดหรือเลือกไฟล์จากรายการเก่าอย่างน้อย 1 รายการ')
+    // 2) ชื่อกำหนดการโฆษณา
+    const name = adName.trim()
+
+    if (!name) {
+      msgs.push('กรุณากรอกชื่อกำหนดการโฆษณา')
+    } else if (!/^[\p{L}\p{N}\p{M} _-]+$/u.test(name)) {
+      msgs.push('ชื่อกำหนดการฯ อนุญาตเฉพาะตัวอักษรทุกภาษา/ตัวเลข และสัญลักษณ์: เว้นวรรค, _ , -')
+    }
+
+    if (msgs.length > 0) {
+      showTopAlert(msgs.join(' • '), 'warning')
 
       return
     }
@@ -1104,6 +1151,27 @@ const StepPropertyDetails = ({
             </Button>
           </div>
         </Grid>
+      )}
+      {topAlert.open && (
+        <Box
+          sx={{
+            position: 'fixed',
+            top: 16,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: theme => theme.zIndex.modal + 1,
+            width: { xs: '90%', sm: 'auto' }
+          }}
+        >
+          <Alert
+            variant='filled'
+            severity={topAlert.sev}
+            onClose={() => setTopAlert(s => ({ ...s, open: false }))}
+            sx={{ boxShadow: 3 }}
+          >
+            {topAlert.msg}
+          </Alert>
+        </Box>
       )}
     </Grid>
   )

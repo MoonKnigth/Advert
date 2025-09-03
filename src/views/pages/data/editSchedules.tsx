@@ -19,6 +19,8 @@ import Button from '@mui/material/Button'
 import { styled } from '@mui/material/styles'
 import { Box, FormControlLabel, Paper, Chip, TextField, Checkbox, CardContent, Card, Tab } from '@mui/material'
 import { TabContext, TabList, TabPanel } from '@mui/lab'
+import Snackbar from '@mui/material/Snackbar'
+import Alert from '@mui/material/Alert'
 
 // Others
 import Cookies from 'js-cookie'
@@ -247,6 +249,17 @@ const EditSchedulesContent = ({
   const mediaCacheRef = useRef<Map<number, MediaItem>>(new Map())
   const mediaMetaRef = useRef<Map<number, MediaIndexEntry>>(new Map())
   const isScanningRef = useRef(false)
+
+  // แจ้งเตือนแบบล่างขวา (snackbar) + แบนเนอร์บนฟอร์ม
+  const [snack, setSnack] = useState<{ open: boolean; msg: string; sev: 'success' | 'error' | 'warning' | 'info' }>({
+    open: false,
+    msg: '',
+    sev: 'warning'
+  })
+
+  const [, setFormError] = useState<string>('')
+
+  const notify = (sev: 'success' | 'error' | 'warning' | 'info', msg: string) => setSnack({ open: true, msg, sev })
 
   // const indexOnly = (items: any[], type: MediaType, page0: number) => {
   //   items.forEach(raw => {
@@ -573,37 +586,64 @@ const EditSchedulesContent = ({
   // ===== Inline rename =====
 
   // ===== Helpers =====
+  // อนุญาต: ตัวอักษรทุกภาษา, ตัวเลข, เครื่องหมายกำกับเสียง (combining marks), และ เว้นวรรค _ -
+  const NAME_ALLOWED_RE = /^[\p{L}\p{N}\p{M} _-]+$/u
 
-  // ✅ NEW: กด Next → สร้าง selectedOldFiles จาก cache (ครบทุกหน้าที่เคยโหลด)
   const handleNextWithValidation = () => {
-    // ... validation เดิม ...
-    if (!adName.trim()) {
-      alert('กรุณากรอกชื่อกำหนดการ')
-
-      return
-    }
-
+    // วันที่
     if (!startAt || !endAt) {
-      alert('กรุณาเลือกวันที่เริ่มต้นและวันที่สิ้นสุด')
+      const msg = 'กรุณาเลือกวันที่เริ่มต้นและวันที่สิ้นสุด'
+
+      setFormError(msg)
+      notify('warning', msg)
 
       return
     }
 
     if (new Date(startAt) > new Date(endAt)) {
-      alert('วันที่เริ่มต้นต้องไม่เกินวันที่สิ้นสุด')
+      const msg = 'วันที่เริ่มต้นต้องไม่เกินวันที่สิ้นสุด'
+
+      setFormError(msg)
+      notify('error', msg)
 
       return
     }
 
+    // ต้องมีไฟล์อย่างน้อย 1 (อัพโหลดใหม่หรือเลือกของเก่า)
     if (uploadedFiles.length === 0 && selected.length === 0) {
-      alert('กรุณาอัพโหลดหรือเลือกไฟล์จากรายการเก่าอย่างน้อย 1 รายการ')
+      const msg = 'กรุณาอัพโหลดหรือเลือกไฟล์จากรายการเก่าอย่างน้อย 1 รายการ'
+
+      setFormError(msg)
+      notify('warning', msg)
 
       return
     }
+
+    // ชื่อ
+    if (!adName.trim()) {
+      const msg = 'กรุณากรอกชื่อกำหนดการ'
+
+      setFormError(msg)
+      notify('warning', msg)
+
+      return
+    }
+
+    // อนุญาตทุกภาษา ยกเว้นสัญลักษณ์ (ยกเว้น เว้นวรรค, _, -)
+    if (!NAME_ALLOWED_RE.test(adName.trim())) {
+      const msg = 'ชื่อกำหนดการฯ อนุญาตเฉพาะตัวอักษรทุกภาษา/ตัวเลข และสัญลักษณ์: เว้นวรรค, _ , -'
+
+      setFormError(msg)
+      notify('warning', msg)
+
+      return
+    }
+
+    // ผ่านทุกเงื่อนไข → เคลียร์แบนเนอร์ แล้ว next
+    setFormError('')
 
     const selectedOldFiles = selected.map(id => mediaCacheRef.current.get(id)).filter(Boolean) as MediaItem[]
 
-    // ✅ ส่งให้พ่อผ่าน onNext เท่านั้น
     onNext?.({ selectedOldFiles })
   }
 
@@ -754,7 +794,7 @@ const EditSchedulesContent = ({
 
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
               {/* แก้ข้อความรวมให้ใช้ meta จริง */}
-              <Chip label={`${mediaTotalElements} ไฟล์ทั้งหมด`} color='secondary' variant='outlined' size='small' />
+              <Chip label={`${mediaTotalElements} ไฟล์ทั้งหมด `} color='secondary' variant='outlined' size='small' />
               {selected.length > 0 && (
                 <Chip label={`${selected.length} ไฟล์ที่เลือก`} color='primary' variant='filled' size='small' />
               )}
@@ -895,9 +935,6 @@ const EditSchedulesContent = ({
         <Typography variant='h5' component='h3' sx={{ color: 'text.primary', mb: 2 }}>
           <strong>กำหนดชื่อกำหนดการโฆษณา</strong>
         </Typography>
-        <Button variant='outlined' onClick={logSelectedDetailsDeep}>
-          Log Selected (deep scan)
-        </Button>
       </Grid>
 
       <Grid size={{ xs: 12, md: 6 }}>
@@ -909,6 +946,7 @@ const EditSchedulesContent = ({
           onChange={handleAdNameChange}
         />
       </Grid>
+
       {/* <Grid size={{ xs: 12 }}>
         <TextField
           fullWidth
@@ -920,6 +958,21 @@ const EditSchedulesContent = ({
           onChange={handleAdDescriptionChange}
         />
       </Grid> */}
+      <Snackbar
+        open={snack.open}
+        onClose={() => setSnack(s => ({ ...s, open: false }))}
+        autoHideDuration={4000}
+        anchorOrigin={{ vertical: 'top', horizontal: 'right' }}
+      >
+        <Alert
+          onClose={() => setSnack(s => ({ ...s, open: false }))}
+          severity={snack.sev}
+          variant='filled'
+          sx={{ width: '100%' }}
+        >
+          {snack.msg}
+        </Alert>
+      </Snackbar>
 
       {/* Footer */}
       {isInternalEdit && (

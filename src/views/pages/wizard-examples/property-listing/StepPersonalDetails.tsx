@@ -1,7 +1,7 @@
 // src/views/pages/wizard-examples/property-listing/StepPersonalDetails.tsx
 'use client'
 
-import { useState, useEffect, memo, useMemo, useCallback } from 'react'
+import { useState, useEffect, memo, useMemo, useCallback, useRef } from 'react'
 
 import dynamic from 'next/dynamic'
 
@@ -26,13 +26,15 @@ import {
   Dialog,
   DialogContent,
   DialogTitle,
+  DialogActions,
   Typography,
   CardContent,
   CardMedia,
   ListItemIcon,
   ListItemText,
   IconButton,
-  CircularProgress
+  CircularProgress,
+  Snackbar
 } from '@mui/material'
 import Cookies from 'js-cookie'
 
@@ -235,13 +237,15 @@ const ScheduleRow = memo(function ScheduleRow({ data, variant = 'coming', onOpen
         </Typography>
       </div>
 
-      <i
-        className='bx bx-trash text-primary cursor-pointer size-5 mr-5'
-        onClick={e => {
-          e.stopPropagation()
-          onDelete(data.schedule_id)
-        }}
-      />
+      <CustomAvatar color='primary'>
+        <i
+          className='bx bx-trash size-5'
+          onClick={e => {
+            e.stopPropagation()
+            onDelete(data.schedule_id)
+          }}
+        />{' '}
+      </CustomAvatar>
     </Box>
   )
 })
@@ -265,7 +269,7 @@ const DeviceGrid = memo(function DeviceGrid({
         <CircularProgress />
       </div>
     )
-  if (deviceInfo.length === 0) return <p>ยังไม่มีอุปกรณ์</p>
+  if (deviceInfo.length === 0) return <h1>ทำการเพิ่มอุปกรณ์ ในมือถือ</h1>
 
   return (
     <Grid container spacing={2}>
@@ -330,6 +334,8 @@ type DeviceDialogProps = {
   onOpenSchedule: (id: number | string) => void
   onDeleteSchedule: (id: number, type: 'today' | 'coming') => void
   onDeviceUpdated?: (patch: { name: string; description: string; platform: string; revoked?: boolean }) => void
+  onNotify: (sev: 'success' | 'error' | 'warning' | 'info', msg: string) => void // Add this line
+  onDeviceDeleted: (id: string) => void
 }
 
 const DeviceDialog = memo(function DeviceDialog({
@@ -339,7 +345,9 @@ const DeviceDialog = memo(function DeviceDialog({
   selectedDescription,
   onOpenSchedule,
   onDeleteSchedule,
-  onDeviceUpdated
+  onDeviceUpdated,
+  onNotify,
+  onDeviceDeleted
 }: DeviceDialogProps) {
   const [openEditDevice, setOpenEditDevice] = useState(false)
 
@@ -350,6 +358,13 @@ const DeviceDialog = memo(function DeviceDialog({
   const [saveError, setSaveError] = useState('')
   const isRevoked = !!selectedDevice?.revoked
   const [revoking, setRevoking] = useState(false)
+  const [openConfirmRevoke, setOpenConfirmRevoke] = useState(false)
+  const [openConfirmDelete, setOpenConfirmDelete] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+
+  // ยืนยันลบ "กำหนดการ"
+  const [openConfirmSchedule, setOpenConfirmSchedule] = useState(false)
+  const [pendingSchedule, setPendingSchedule] = useState<{ id: number; type: 'today' | 'coming' } | null>(null)
 
   const deviceId = selectedDevice?.device_id
 
@@ -375,8 +390,6 @@ const DeviceDialog = memo(function DeviceDialog({
 
     if (!id) return
 
-    if (!confirm(`ยืนยันออกจากระบบอุปกรณ์\nID: ${id}`)) return
-
     try {
       setRevoking(true)
 
@@ -392,20 +405,49 @@ const DeviceDialog = memo(function DeviceDialog({
         throw new Error(data?.message || `Revoke failed (${res.status})`)
       }
 
-      // ✅ แจ้งพาเรนต์ให้อัปเดต state ทันที
       onDeviceUpdated?.({
         revoked: true,
         name: selectedDevice?.name,
         description: selectedDevice?.description,
         platform: selectedDevice?.platform
       })
-
-      alert('ออกจากระบบอุปกรณ์สำเร็จ')
+      onNotify?.('success', 'ออกจากระบบอุปกรณ์สำเร็จ')
     } catch (e: any) {
-      alert(e?.message || 'ไม่สามารถออกจากระบบอุปกรณ์ได้')
+      onNotify?.('error', e?.message || 'ไม่สามารถออกจากระบบอุปกรณ์ได้')
     } finally {
       setRevoking(false)
-      handleClose() // ปิดเมนูสามจุด
+      setOpenConfirmRevoke(false)
+      handleClose() // ปิดเมนู 3 จุด
+    }
+  }
+
+  const handleDeleteDevice = async () => {
+    const id = selectedDevice?.device_id
+
+    if (!id) return
+
+    try {
+      setDeleting(true)
+
+      const res = await fetch(`/api/auth/device/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' }
+      })
+
+      const data = await res.json().catch(() => ({}))
+
+      if (!res.ok || data?.success === false) {
+        throw new Error(data?.message || `Delete failed (${res.status})`)
+      }
+
+      onNotify?.('success', 'ลบอุปกรณ์สำเร็จ')
+      onDeviceDeleted?.(id)
+    } catch (e: any) {
+      onNotify?.('error', e?.message || 'ลบอุปกรณ์ไม่สำเร็จ')
+    } finally {
+      setDeleting(false)
+      setOpenConfirmDelete(false)
+      handleClose()
     }
   }
 
@@ -527,9 +569,7 @@ const DeviceDialog = memo(function DeviceDialog({
               </MenuItem>
               <MenuItem
                 disabled={revoking || selectedDevice?.revoked === true}
-                onClick={async () => {
-                  await handleRevokeDevice()
-                }}
+                onClick={() => setOpenConfirmRevoke(true)}
               >
                 <ListItemIcon>
                   <i className='bx bx-exit' />
@@ -537,14 +577,94 @@ const DeviceDialog = memo(function DeviceDialog({
                 <ListItemText primary={revoking ? 'กำลังออกจากระบบ…' : 'ออกจากระบบอุปกรณ์'} />
               </MenuItem>
 
-              <MenuItem>
+              <MenuItem
+                disabled={deleting || revoking || selectedDevice?.revoked === false}
+                onClick={() => setOpenConfirmDelete(true)}
+              >
                 <ListItemIcon>
                   <i className='bx bx-trash' />
                 </ListItemIcon>
-                <ListItemText primary='ลบข้อมูลอุปกรณ์' />
+                <ListItemText primary={deleting ? 'กำลังลบ…' : 'ลบข้อมูลอุปกรณ์'} />
               </MenuItem>
             </Menu>
           </Box>
+
+          {/* Confirm delete schedule */}
+          <Dialog open={openConfirmSchedule} onClose={() => setOpenConfirmSchedule(false)} maxWidth='sm' fullWidth>
+            <DialogTitle>ยืนยันการลบกำหนดการ Schedule ID: {pendingSchedule?.id}</DialogTitle>
+            <DialogContent>
+              <Alert severity='warning' variant='outlined' sx={{ mb: 2 }}>
+                การลบจะเอากำหนดการนี้ออกจากอุปกรณ์ทันที และไม่สามารถกู้คืนได้
+              </Alert>
+              {/* <Typography variant='body2' color='text.secondary'>
+                Schedule ID: {pendingSchedule?.id}
+              </Typography> */}
+            </DialogContent>
+            <DialogActions>
+              <Button onClick={() => setOpenConfirmSchedule(false)}>ยกเลิก</Button>
+              <Button
+                color='error'
+                variant='contained'
+                onClick={() => {
+                  if (!pendingSchedule) return
+                  onDeleteSchedule?.(pendingSchedule.id, pendingSchedule.type)
+                  setOpenConfirmSchedule(false)
+                  setPendingSchedule(null)
+                }}
+              >
+                ลบเลย
+              </Button>
+            </DialogActions>
+          </Dialog>
+
+          {/* Confirm Revoke */}
+          <Dialog open={openConfirmRevoke} onClose={() => setOpenConfirmRevoke(false)} maxWidth='xs' fullWidth>
+            <DialogTitle>ยืนยันการออกจากระบบอุปกรณ์ ID: {selectedDevice?.device_id}</DialogTitle>
+            <DialogContent>
+              <Alert severity='warning' variant='outlined' sx={{ mb: 2 }}>
+                ต้องการออกจากระบบของอุปกรณ์นี้จริง ๆ ใช่ไหม?{' '}
+              </Alert>
+              {/* <Typography>ต้องการออกจากระบบของอุปกรณ์นี้จริง ๆ ใช่ไหม?</Typography> */}
+              {/* <Typography variant='body2' color='text.secondary' sx={{ mt: 1 }}>
+                ID: {selectedDevice?.device_id}
+              </Typography> */}
+            </DialogContent>
+            <DialogActions>
+              <Button onClick={() => setOpenConfirmRevoke(false)} disabled={revoking}>
+                ยกเลิก
+              </Button>
+              <Button color='warning' variant='contained' onClick={handleRevokeDevice} disabled={revoking}>
+                {revoking ? 'กำลังดำเนินการ…' : 'ยืนยัน'}
+              </Button>
+            </DialogActions>
+          </Dialog>
+
+          {/* Confirm Delete */}
+          <Dialog open={openConfirmDelete} onClose={() => setOpenConfirmDelete(false)} maxWidth='xs' fullWidth>
+            <DialogTitle>ยืนยันการลบอุปกรณ์ ID: {selectedDevice?.device_id}</DialogTitle>
+            <DialogContent>
+              <Alert severity='warning' variant='outlined' sx={{ mb: 2 }}>
+                การลบเป็นการลบถาวร ไม่สามารถกู้คืนได้
+              </Alert>
+              {/* <Typography>ต้องการลบอุปกรณ์นี้จริง ๆ ใช่ไหม?</Typography> */}
+              {/* <Typography variant='body2' color='text.secondary' sx={{ mt: 1 }}>
+                ID: {selectedDevice?.device_id}
+              </Typography> */}
+            </DialogContent>
+            <DialogActions>
+              <Button onClick={() => setOpenConfirmDelete(false)} disabled={deleting}>
+                ยกเลิก
+              </Button>
+              <Button
+                color='error'
+                variant='contained'
+                onClick={handleDeleteDevice}
+                disabled={deleting || selectedDevice?.revoked === false}
+              >
+                {deleting ? 'กำลังลบ…' : 'ลบเลย'}
+              </Button>
+            </DialogActions>
+          </Dialog>
 
           {/* Dialog แก้ไขข้อมูลอุปกรณ์ */}
           <Dialog open={openEditDevice} onClose={() => setOpenEditDevice(false)} maxWidth='sm' fullWidth>
@@ -614,7 +734,10 @@ const DeviceDialog = memo(function DeviceDialog({
                     run_at_to: selectedDevice.schedules_today.run_at_to
                   }}
                   onOpen={onOpenSchedule}
-                  onDelete={id => onDeleteSchedule(Number(id), 'today')}
+                  onDelete={id => {
+                    setPendingSchedule({ id: Number(id), type: 'today' })
+                    setOpenConfirmSchedule(true)
+                  }}
                 />
               ) : (
                 <div className='mb-3 bg-white rounded p-4 flex items-center justify-center w-full'>
@@ -625,7 +748,7 @@ const DeviceDialog = memo(function DeviceDialog({
           </CardContent>
 
           {/* กำหนดการที่จะมาถึง */}
-          <CardContent className='flex flex-col' sx={{ color: 'info.light' }}>
+          <CardContent className='flex flex-col'>
             <Box className='plb-3 pli-4 flex flex-col rounded' sx={{ backgroundColor: 'rgba(255, 62, 29, 0.08)' }}>
               <div className='flex justify-start my-3'>
                 <EventAvailableIcon color='primary' sx={{ mr: 1 }} />
@@ -647,7 +770,10 @@ const DeviceDialog = memo(function DeviceDialog({
                       run_at_to: s.run_at_to
                     }}
                     onOpen={onOpenSchedule}
-                    onDelete={id => onDeleteSchedule(Number(id), 'coming')}
+                    onDelete={id => {
+                      setPendingSchedule({ id: Number(id), type: 'coming' })
+                      setOpenConfirmSchedule(true)
+                    }}
                   />
                 ))
               ) : (
@@ -917,7 +1043,63 @@ const StepPersonalDetails = ({
   const [selectedDescription, setSelectedDescription] = useState<string | null>(null)
   const [hasScheduleCache, setHasScheduleCache] = useState<Record<string, boolean>>({})
 
-  useState
+  // ⬇️ Alert ลอย Top-Center (ไม่ใช้ Snackbar)
+  const [topAlert, setTopAlert] = useState<{
+    open: boolean
+    msg: string
+    sev: 'success' | 'error' | 'warning' | 'info'
+  }>({ open: false, msg: '', sev: 'warning' })
+
+  const alertTimerRef = useRef<number | null>(null)
+
+  const showTopAlert = (msg: string, sev: 'success' | 'error' | 'warning' | 'info' = 'warning') => {
+    setTopAlert({ open: true, msg, sev })
+    if (alertTimerRef.current) window.clearTimeout(alertTimerRef.current)
+    alertTimerRef.current = window.setTimeout(
+      () => setTopAlert(s => ({ ...s, open: false })),
+      4000
+    ) as unknown as number
+  }
+
+  const missingMessages = useMemo(() => {
+    const msgs: string[] = []
+
+    if (!selectedDeviceIds?.length) msgs.push('กรุณาเลือกอุปกรณ์อย่างน้อย 1 เครื่อง')
+
+    if (!startDateTime || !endDateTime) {
+      msgs.push('กรุณาเลือกวันที่เริ่มต้นและวันที่สิ้นสุด')
+    } else if (endDateTime < startDateTime) {
+      msgs.push('วันสิ้นสุดต้องไม่น้อยกว่าวันเริ่มต้น')
+    }
+
+    return msgs
+  }, [selectedDeviceIds, startDateTime, endDateTime])
+
+  const handleNextWithValidation = () => {
+    if (missingMessages.length > 0) {
+      showTopAlert(missingMessages.join(' • '), 'warning') // แสดงบน Top-Center
+
+      return
+    }
+
+    handleNext()
+  }
+
+  // const triedRefetchOnce = useRef(false)
+
+  const retryRef = useRef(0)
+
+  useEffect(() => {
+    if (!Array.isArray(deviceInfo) || deviceInfo.length > 0) return
+    if (retryRef.current >= 3) return // ลิมิต 3 ครั้ง
+
+    const delay = 1000 * Math.pow(2, retryRef.current) // 1s, 2s, 4s
+
+    retryRef.current += 1
+    const t = setTimeout(() => fetchDeviceInfo?.(), delay)
+
+    return () => clearTimeout(t)
+  }, [deviceInfo, fetchDeviceInfo])
 
   // ✅ เก็บ patch แบบ optimistic ต่ออุปกรณ์ (key = device_id)
   const [devicePatches, setDevicePatches] = useState<
@@ -1041,14 +1223,6 @@ const StepPersonalDetails = ({
   const [assetTitle, setAssetTitle] = useState<string>('')
   const [assetType, setAssetType] = useState<'image' | 'video' | null>(null)
   const [assetSrc, setAssetSrc] = useState<string | null>(null)
-
-  // mounted
-  // ถ้า deviceInfo ยังว่าง ให้ลองดึงอีกรอบอัตโนมัติ
-  useEffect(() => {
-    if (!Array.isArray(deviceInfo) || deviceInfo.length === 0) {
-      fetchDeviceInfo?.()
-    }
-  }, [deviceInfo, fetchDeviceInfo])
 
   useEffect(() => setMounted(true), [])
 
@@ -1190,12 +1364,10 @@ const StepPersonalDetails = ({
     async (scheduleId: number, scheduleType: 'today' | 'coming') => {
       try {
         if (!selectedDevice?.device_id) {
-          alert('ไม่พบ Device ID')
+          notify('error', 'ไม่พบ Device ID')
 
           return
         }
-
-        if (!confirm(`ยืนยันลบกำหนดการ ${scheduleId} ออกจากอุปกรณ์ ${selectedDevice.device_id}?`)) return
 
         setDeletingId(scheduleId)
 
@@ -1230,9 +1402,10 @@ const StepPersonalDetails = ({
           return next
         })
 
-        alert('Delete success') // ✅ ตามที่ต้องการ
+        // 🔔 แจ้งเตือนล่างขวา
+        notify('success', 'ลบกำหนดการสำเร็จ')
       } catch (e: any) {
-        alert(e?.message || 'ลบไม่สำเร็จ')
+        notify('error', e?.message || 'ลบกำหนดการไม่สำเร็จ')
       } finally {
         setDeletingId(null)
       }
@@ -1410,6 +1583,24 @@ const StepPersonalDetails = ({
     [resolveMediaForItem]
   )
 
+  // ⬇️ ประกาศ Hook ให้ครบก่อน
+  const [snack, setSnack] = useState<{ open: boolean; msg: string; sev: 'success' | 'error' | 'warning' | 'info' }>({
+    open: false,
+    msg: '',
+    sev: 'success'
+  })
+
+  const notify = (sev: 'success' | 'error' | 'warning' | 'info', msg: string) => setSnack({ open: true, sev, msg })
+
+  const handleDeviceDeleted = useCallback(() => {
+    setOpenDialog(false)
+    setSelectedDevice(null)
+    fetchDeviceInfo?.()
+  }, [fetchDeviceInfo])
+
+  // ❌ ลบ early return อันแรกทิ้งไป
+
+  // ✅ คงไว้แค่ครั้งเดียว หลังประกาศ Hook ทั้งหมดแล้ว
   if (!mounted) {
     return (
       <Card>
@@ -1446,6 +1637,8 @@ const StepPersonalDetails = ({
               onOpenSchedule={id => fetchScheduleDetail(id)}
               onDeleteSchedule={(id, type) => handleRemoveSchedule(id, type)}
               onDeviceUpdated={handleDeviceUpdated}
+              onNotify={notify}
+              onDeviceDeleted={handleDeviceDeleted}
             />
 
             {/* Dialog 2: รายละเอียดกำหนดการ */}
@@ -1500,10 +1693,6 @@ const StepPersonalDetails = ({
               />
             </Grid>
           </Grid>
-
-          <Alert variant='outlined' severity='error'>
-            &quot;กรุณาเลือกวิธีการเลือกอุปกรณ์&quot;,&quot;กรุณาระบุช่วงเวลาเริ่มต้นและสิ้นสุด&quot;,&quot;วันสิ้นสุดต้องไม่น้อยกว่าวันเริ่มต้น&quot;
-          </Alert>
         </div>
       </Grid>
 
@@ -1520,7 +1709,7 @@ const StepPersonalDetails = ({
         <Button
           variant='contained'
           color={activeStep === steps.length - 1 ? 'success' : 'error'}
-          onClick={handleNext}
+          onClick={handleNextWithValidation}
           endIcon={
             activeStep === steps.length - 1 ? (
               <i className='bx-check' />
@@ -1532,6 +1721,42 @@ const StepPersonalDetails = ({
           {activeStep === steps.length - 1 ? 'Submit' : 'Next'}
         </Button>
       </Grid>
+      <Snackbar
+        open={snack.open}
+        onClose={() => setSnack(s => ({ ...s, open: false }))}
+        autoHideDuration={4000}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+      >
+        <Alert
+          onClose={() => setSnack(s => ({ ...s, open: false }))}
+          severity={snack.sev}
+          variant='filled'
+          sx={{ width: '100%' }}
+        >
+          {snack.msg}
+        </Alert>
+      </Snackbar>
+      {topAlert.open && (
+        <Box
+          sx={{
+            position: 'fixed',
+            top: 16,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: theme => theme.zIndex.modal + 1, // ให้อยู่เหนือ dialog/พื้นหลังทั่วไป
+            width: { xs: '90%', sm: 'auto' }
+          }}
+        >
+          <Alert
+            variant='filled'
+            severity={topAlert.sev}
+            onClose={() => setTopAlert(s => ({ ...s, open: false }))}
+            sx={{ boxShadow: 3 }}
+          >
+            {topAlert.msg}
+          </Alert>
+        </Box>
+      )}
     </Grid>
   )
 }

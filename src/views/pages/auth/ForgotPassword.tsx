@@ -2,7 +2,6 @@
 
 // Next Imports
 import Link from 'next/link'
-import { useParams } from 'next/navigation'
 
 // MUI Imports
 import Typography from '@mui/material/Typography'
@@ -13,7 +12,6 @@ import { styled, useTheme } from '@mui/material/styles'
 import classnames from 'classnames'
 
 // Type Imports
-import type { Locale } from '@configs/i18n'
 
 // Component Imports
 import DirectionalIcon from '@components/DirectionalIcon'
@@ -24,7 +22,6 @@ import CustomTextField from '@core/components/mui/TextField'
 import { useSettings } from '@core/hooks/useSettings'
 
 // Util Imports
-import { getLocalizedUrl } from '@/utils/i18n'
 
 // Styled Custom Components
 const ForgotPasswordIllustration = styled('img')(({ theme }) => ({
@@ -43,7 +40,6 @@ const ForgotPasswordIllustration = styled('img')(({ theme }) => ({
 
 const ForgotPassword = () => {
   // Hooks
-  const { lang: locale } = useParams()
   const { settings } = useSettings()
   const theme = useTheme()
 

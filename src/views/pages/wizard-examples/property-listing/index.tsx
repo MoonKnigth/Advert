@@ -204,7 +204,7 @@ const PropertyListingWizard = () => {
   const [adName, setAdName] = useState<string>('')
   const [adDescription, setAdDescription] = useState<string>('')
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([])
-  const [deviceInfo, setDeviceInfo] = useState<any[]>([])
+  const [deviceInfo, setDeviceInfo] = useState<any[] | null>(null)
   const [mediaList, setMediaList] = useState<any[]>([])
   const [scheduleList, setScheduleList] = useState<any[]>([])
   const [selectedDeviceIds, setSelectedDeviceIds] = useState<string[]>([])
@@ -311,11 +311,14 @@ const PropertyListingWizard = () => {
     didFetchRef.current = true
     fetchData()
   }, [])
+  const inFlightRef = useRef(false)
 
   const fetchData = async () => {
     const accessToken = Cookies.get('accessToken')
 
     if (!accessToken) return
+    if (inFlightRef.current) return // กันซ้ำ
+    inFlightRef.current = true
 
     try {
       const fetchJSON = async <T = any,>(url: string, method: 'GET' | 'POST'): Promise<T> => {
@@ -435,6 +438,8 @@ const PropertyListingWizard = () => {
       setDeviceInfo([])
       setMediaList([])
       setScheduleList([])
+    } finally {
+      inFlightRef.current = false
     }
   }
 
@@ -451,7 +456,7 @@ const PropertyListingWizard = () => {
             setStartDateTime={setStartDateTime}
             endDateTime={endDateTime}
             setEndDateTime={setEndDateTime}
-            deviceInfo={deviceInfo}
+            deviceInfo={deviceInfo ?? []}
             fetchDeviceInfo={fetchData}
             mediaList={mediaList}
             scheduleList={scheduleList}

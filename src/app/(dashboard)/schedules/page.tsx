@@ -5,7 +5,7 @@ import type { Metadata } from 'next'
 import DataTable from '@/views/pages/data/dataTable'
 
 export const metadata: Metadata = {
-  title: 'schedules'
+  title: 'Schedules'
 
   // description: 'Login to your account'
 }

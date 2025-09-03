@@ -5,6 +5,8 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 
 import dynamic from 'next/dynamic'
 
+import ArrowBackIcon from '@mui/icons-material/ArrowBack'
+
 const EditSchedules = dynamic(() => import('./editSchedules').then(m => m.EditSchedules), { ssr: false })
 
 const EditSchedulesUpdate = dynamic(() => import('./editSchedulesUpdate').then(m => m.default), { ssr: false })
@@ -72,6 +74,25 @@ type DirectionType = {
   style: string // 'แนวนอน' | 'แนวตั้ง'
 }
 
+type AdsItem = {
+  id: number
+  title: string
+  type: 'image' | 'video' | string
+  duration: string | number
+  ad_run_at?: string | null
+  ad_run_at_to?: string | null
+}
+
+type ScheduleDetail = {
+  id: number
+  scheduleNumber: string
+  name: string
+  playOrientation: 'HORIZONTAL' | 'VERTICAL' | string
+  runAt?: string
+  runAtTo?: string
+  adsItems: AdsItem[]
+}
+
 // === เพิ่ม constants สำหรับ icon/label ไว้บนสุด (ใกล้ ๆ DirectionType) ===
 const HORIZONTAL_CONST: DirectionType = { img: '/images/tv/Vector_red.svg', style: 'แนวนอน' }
 
@@ -125,19 +146,6 @@ declare module '@tanstack/table-core' {
   }
 }
 
-// type MediaItem = {
-//   id: number
-//   title: string
-//   type: 'video' | 'image'
-//   fileUrl: string | null
-//   thumbnailUrl: string | null
-//   duration: number | null
-//   fileSize: number | null
-//   aspectRatio: string | null
-//   description: string
-//   status: number | null
-// }
-
 const fuzzyFilter: FilterFn<any> = (row, columnId, value, addMeta) => {
   const itemRank = rankItem(row.getValue(columnId), value)
 
@@ -156,7 +164,6 @@ const DataTable: React.FC = () => {
   const [filterType, setFilterType] = useState<'1' | '2' | '3' | '4'>('1')
   const [rowsPerPage, setRowsPerPage] = useState<number>(10)
   const [loadingTable, setLoadingTable] = useState<boolean>(true)
-  const [openPreviewDialog, setOpenPreviewDialog] = useState(false)
   const [previewDialogOpen, setPreviewDialogOpen] = useState(false)
 
   const [scheduleList, setScheduleList] = useState<any[]>([])
@@ -180,6 +187,193 @@ const DataTable: React.FC = () => {
     msg: '',
     severity: 'success'
   })
+
+  // ----- Preview states -----
+  const [openScheduleDialog, setOpenScheduleDialog] = useState(false)
+  const [scheduleDetail, setScheduleDetail] = useState<ScheduleDetail | null>(null)
+
+  // Asset preview (ภาพ/วิดีโอ)
+  const [openAssetDialog, setOpenAssetDialog] = useState(false)
+  const [assetLoading, setAssetLoading] = useState(false)
+  const [assetError, setAssetError] = useState<string | null>(null)
+  const [assetTitle, setAssetTitle] = useState<string>('')
+  const [assetType, setAssetType] = useState<'image' | 'video' | null>(null)
+  const [assetSrc, setAssetSrc] = useState<string | null>(null)
+
+  // ----- helpers -----
+  const RAW_BASE = process.env.NEXT_PUBLIC_SIGNBOARD_BASE_URL ?? 'https://cloud.softacular.net'
+  const BASE_URL = RAW_BASE.replace('http://', 'https://')
+  const toAbs = (u?: string | null) => (!u ? '' : /^https?:\/\//i.test(u) ? u : `${BASE_URL}${u}`)
+  const normalizeTitle = (t?: string) => (t || '').trim().toLowerCase()
+
+  const formatDate = (dateString?: string | null) => {
+    if (!dateString) return 'ไม่ระบุ'
+    const d = new Date(dateString)
+
+    if (Number.isNaN(d.getTime())) return 'ไม่ระบุ'
+
+    return new Intl.DateTimeFormat('th-TH', {
+      timeZone: 'Asia/Bangkok',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    }).format(d)
+  }
+
+  const openScheduleById = async (scheduleId: number) => {
+    try {
+      const accessToken = Cookies.get('accessToken')
+
+      if (!accessToken) throw new Error('Missing access token')
+
+      const res = await fetch(`/api/schedules/${scheduleId}`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        cache: 'no-store'
+      })
+
+      const json = await res.json().catch(() => ({}))
+
+      if (!res.ok || json?.success === false) {
+        throw new Error(json?.message || `HTTP ${res.status}`)
+      }
+
+      setScheduleDetail(json.data as ScheduleDetail)
+      setOpenScheduleDialog(true)
+    } catch (e: any) {
+      setToast({ open: true, msg: e?.message || 'โหลดรายละเอียดไม่สำเร็จ', severity: 'error' })
+    }
+  }
+
+  // สแกน media แบบ on-demand จาก /api/auth/media ทั้ง video & image
+  async function fetchMediaPage(
+    type: 'video' | 'image',
+    page = 0,
+    size = 100,
+    token?: string
+  ): Promise<{ list: any[]; totalPages: number }> {
+    const res = await fetch(`/api/auth/media?page=${page}&size=${size}&type=${type}`, {
+      headers: {
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        'Content-Type': 'application/json'
+      }
+    })
+
+    const json = await res.json().catch(() => ({}))
+
+    const directArr: any[] = Array.isArray(json?.data?.media)
+      ? json.data.media
+      : Array.isArray(json?.data?.data)
+        ? json.data.data
+        : Array.isArray(json?.items)
+          ? json.items
+          : Array.isArray(json?.results)
+            ? json.results
+            : []
+
+    const totalPages = Number(json?.data?.total_pages ?? 1)
+
+    return { list: directArr, totalPages }
+  }
+
+  async function findMediaOnDemand(item: AdsItem): Promise<{ url?: string; type?: 'image' | 'video'; title?: string }> {
+    // 0) ถ้า ads item มี url ตรง ๆ
+    const anyItem: any = item
+
+    const directUrl =
+      anyItem?.fileUrl || anyItem?.file_url || anyItem?.url || anyItem?.thumbnail_url || anyItem?.thumbnailUrl
+
+    if (directUrl) {
+      return {
+        url: toAbs(String(directUrl)),
+        type: String(item.type).toLowerCase() === 'video' ? 'video' : 'image',
+        title: anyItem?.title ?? anyItem?.name ?? ''
+      }
+    }
+
+    const token = Cookies.get('accessToken')
+    const itemType: 'video' | 'image' = String(item.type).toLowerCase() === 'video' ? 'video' : 'image'
+    const wantedId = Number(anyItem.mediaId ?? anyItem.media_id ?? item.id ?? NaN)
+    const wantedTitle = normalizeTitle(item.title)
+    const wantedDuration = item.duration != null ? Number(item.duration) : null
+
+    // ลอง type เดียวกันก่อน แล้วค่อยสลับ
+    for (const type of [itemType, itemType === 'video' ? 'image' : 'video'] as const) {
+      let page = 0,
+        total = 1
+      let best: any | undefined
+      let bestDiff = Number.POSITIVE_INFINITY
+
+      do {
+        const { list, totalPages } = await fetchMediaPage(type, page, 100, token)
+
+        total = totalPages
+
+        // 1) id ตรง
+        if (!Number.isNaN(wantedId)) {
+          const byId = list.find((m: any) => Number(m?.id ?? m?.media_id) === wantedId)
+
+          if (byId?.fileUrl || byId?.file_url || byId?.url) {
+            return {
+              url: toAbs(byId.fileUrl ?? byId.file_url ?? byId.url),
+              type,
+              title: byId?.title ?? byId?.name ?? ''
+            }
+          }
+        }
+
+        // 2) ชื่อ + ประเภท (+duration สำหรับวิดีโอ)
+        for (const m of list) {
+          const mt = normalizeTitle(m?.title ?? m?.name ?? '')
+
+          if (mt === wantedTitle) {
+            if (type === 'video' && wantedDuration != null) {
+              const d = Number(m?.duration ?? wantedDuration)
+              const diff = Math.abs(d - wantedDuration)
+
+              if (diff < bestDiff) {
+                best = m
+                bestDiff = diff
+              }
+            } else if (!best) {
+              best = m
+              bestDiff = 0
+            }
+          }
+        }
+
+        page += 1
+      } while (page < total)
+
+      if (best?.fileUrl || best?.file_url || best?.url) {
+        return { url: toAbs(best.fileUrl ?? best.file_url ?? best.url), type, title: best?.title ?? best?.name ?? '' }
+      }
+    }
+
+    return {}
+  }
+
+  // เปิด asset preview จาก item โฆษณา
+  const onOpenAsset = async (item: AdsItem) => {
+    setOpenAssetDialog(true)
+    setAssetLoading(true)
+    setAssetError(null)
+    setAssetTitle(item.title || 'ตัวอย่างสื่อ')
+    setAssetSrc(null)
+    setAssetType(null)
+
+    try {
+      const found = await findMediaOnDemand(item)
+
+      if (!found?.url) throw new Error('ไม่พบไฟล์ที่ตรงกับรายการนี้')
+
+      setAssetSrc(found.url)
+      setAssetType(found.type ?? (String(item.type).toLowerCase() === 'video' ? 'video' : 'image'))
+    } catch (e: any) {
+      setAssetError(e?.message || 'โหลดตัวอย่างสื่อไม่สำเร็จ')
+    } finally {
+      setAssetLoading(false)
+    }
+  }
 
   // เปิด confirm โดยเก็บ id (และข้อมูลแถว) ไว้
   const promptDelete = (row: RowType) => {
@@ -348,80 +542,67 @@ const DataTable: React.FC = () => {
     })
   }
 
-  // ===== (2) ฟังก์ชัน fetch + parse ที่ทน response หลายรูปแบบ =====
-  const fetchScheduleList = async (page = currentPage, size = rowsPerPage) => {
-    try {
-      const token = Cookies.get('accessToken')
+  const fetchScheduleList = React.useCallback(
+    async (page = currentPage, size = rowsPerPage) => {
+      try {
+        const token = Cookies.get('accessToken')
+        const backendPage = Math.max(0, page - 1)
 
-      // ✅ UI page (1-based) → API page (0-based)
-      const backendPage = Math.max(0, page - 1)
+        const res = await fetch(`/api/proxy/schedules?page=${backendPage}&size=${size}`, {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {})
+          }
+        })
 
-      const res = await fetch(`/api/proxy/schedules?page=${backendPage}&size=${size}`, {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        const text = await res.text()
+
+        if (!res.ok) throw new Error(`HTTP ${res.status}: ${text}`)
+
+        if (!text.trim()) {
+          setScheduleList([])
+          setBaseData([])
+          setData([])
+          setCurrentPage(1)
+          setTotalPages(1)
+          setTotalElements(0)
+
+          return
         }
-      })
 
-      const text = await res.text()
+        const json = JSON.parse(text)
+        const arr = extractSchedulesArray(json)
 
-      if (!res.ok) throw new Error(`HTTP ${res.status}: ${text}`)
+        const metaPage = Number(json?.data?.page ?? backendPage) // 0-based
+        const metaSize = Number(json?.data?.size ?? size)
+        const metaPages = Number(json?.data?.total_pages ?? 1)
+        const metaTotal = Number(json?.data?.total_elements ?? arr.length)
 
-      if (!text.trim()) {
+        setTotalPages(metaPages)
+        setTotalElements(metaTotal)
+        await fetchSummaryTotals(metaTotal)
+
+        setCurrentPage(metaPage + 1) // UI 1-based
+        setScheduleList(arr)
+
+        const offset = metaPage * metaSize
+        const rows = mapSchedulesToRows(arr, offset)
+
+        setBaseData(rows)
+        setData(rows)
+      } catch (err) {
+        console.warn('Schedule list fetch failed:', err)
         setScheduleList([])
         setBaseData([])
         setData([])
         setCurrentPage(1)
         setTotalPages(1)
         setTotalElements(0)
-
-        return
       }
-
-      const json = JSON.parse(text)
-
-      // ✅ schedules array
-      const arr = extractSchedulesArray(json)
-
-      // ✅ meta (page ที่ API คืนมา = 0-based)
-      const metaPage = Number(json?.data?.page ?? backendPage) // 0-based
-      const metaSize = Number(json?.data?.size ?? size)
-      const metaPages = Number(json?.data?.total_pages ?? 1)
-      const metaTotal = Number(json?.data?.total_elements ?? arr.length)
-
-      setTotalPages(metaPages)
-      setTotalElements(metaTotal)
-      await fetchSummaryTotals(metaTotal)
-
-      // ✅ แสดงใน UI เป็น 1-based
-      setCurrentPage(metaPage + 1)
-
-      setScheduleList(arr)
-
-      // ✅ offset = metaPage * metaSize (เพราะ metaPage เป็น 0-based)
-      const offset = metaPage * metaSize
-      const rows = mapSchedulesToRows(arr, offset)
-
-      setBaseData(rows)
-      setData(rows)
-
-      console.log('📋 [/api/proxy/schedules] count:', arr.length, {
-        page_ui: metaPage + 1,
-        page_api: metaPage,
-        size: metaSize,
-        total_pages: metaPages
-      })
-    } catch (err) {
-      console.warn('Schedule list fetch failed:', err)
-      setScheduleList([])
-      setBaseData([])
-      setData([])
-      setCurrentPage(1)
-      setTotalPages(1)
-      setTotalElements(0)
-    }
-  }
+    },
+    [currentPage, rowsPerPage]
+  )
 
   const onFinishUpdate = () => {
     setPreviewDialogOpen(false)
@@ -486,7 +667,7 @@ const DataTable: React.FC = () => {
     return Number.isNaN(t) ? Date.parse(withTime + 'Z') : t
   }
 
-  function getRowStatus(row: RowType): 'กำลังฉาย' | 'ยังไม่เริ่ม' | 'หมดอายุ' {
+  const getRowStatus = React.useCallback((row: RowType): 'กำลังฉาย' | 'ยังไม่เริ่ม' | 'หมดอายุ' => {
     const now = Date.now()
     const st = toTsBounded(row.start_date, 'start')
     const et = toTsBounded(row.end_date, 'end')
@@ -498,9 +679,8 @@ const DataTable: React.FC = () => {
       return 'กำลังฉาย'
     }
 
-    // fallback
     return (row.status as any) || 'ยังไม่เริ่ม'
-  }
+  }, [])
 
   // ===== columns =====
   const columns = useMemo<ColumnDef<RowType, any>[]>(() => {
@@ -556,15 +736,16 @@ const DataTable: React.FC = () => {
           const row = info.row.original
 
           return (
-            <div className='flex justify-around gap-2'>
+            <div className='flex justify-around gap-0.5'>
               <CustomIconButton
                 aria-label='view details'
                 color='info'
                 variant='tonal'
-                onClick={() => setOpenPreviewDialog(true)}
+                onClick={() => openScheduleById(row.schedule_id)} // ← เปลี่ยนมาเรียกโหลด+เปิด dialog
               >
                 <i className='bx-show' />
               </CustomIconButton>
+
               <CustomIconButton
                 aria-label='edit campaign'
                 color='warning'
@@ -888,17 +1069,192 @@ const DataTable: React.FC = () => {
         </div>
       </MuiCard>
 
-      {/* Preview Dialog */}
-      <Dialog open={openPreviewDialog} onClose={() => setOpenPreviewDialog(false)} maxWidth='md' fullWidth>
-        <DialogTitle>
-          <Box display='flex' justifyContent='space-between' alignItems='center'>
-            <Typography variant='h6'>ดูรายละเอียดแคมเปญ</Typography>
-            <IconButton onClick={() => setOpenPreviewDialog(false)}>
-              <Icon icon='material-symbols:close' />
-            </IconButton>
-          </Box>
-        </DialogTitle>
-        <DialogContent>{/* ใส่ StepPropertyFeatures ตามที่คุณใช้ได้ที่นี่ */}</DialogContent>
+      {/* Schedule Detail Dialog */}
+      <Dialog
+        sx={{ p: 0, m: 0 }}
+        open={openScheduleDialog}
+        onClose={() => setOpenScheduleDialog(false)}
+        maxWidth='md'
+        fullWidth
+      >
+        <Box mt={3} mx={3} mb={0} display='flex' justifyContent='space-between' alignItems='center'>
+          <Button
+            sx={{ borderRadius: '100%', width: 60, height: 60, m: 0, p: 0 }}
+            onClick={() => setOpenScheduleDialog(false)}
+            aria-label='ปิดรายละเอียดกำหนดการ'
+          >
+            <ArrowBackIcon />
+          </Button>
+          <DialogTitle>รายละเอียดกำหนดการ</DialogTitle>
+        </Box>
+
+        <DialogContent sx={{ px: 0, minHeight: { xs: '60vh', md: 555 } }}>
+          {scheduleDetail ? (
+            <CardContent className='flex flex-col gap-4 pt-1'>
+              <CardContent className='flex flex-col gap-4 p-0'>
+                <div className='flex items-center gap-3 w-full'>
+                  <CustomAvatar variant='rounded' skin='light' color='primary' size={60}>
+                    <i className='bx-time' style={{ fontSize: '36px' }} />
+                  </CustomAvatar>
+                  <div className='flex justify-between items-center '>
+                    <div className='flex flex-col items-start w-full'>
+                      <Typography variant='h3'>{scheduleDetail.name}</Typography>
+                      <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                        <Typography variant='body2'>ID: {scheduleDetail.id} |</Typography>
+                        <Typography variant='body2'>Schedule No : {scheduleDetail.scheduleNumber} |</Typography>
+                        <Typography variant='body2'>
+                          {formatDate(scheduleDetail.runAt || '')} ถึง {formatDate(scheduleDetail.runAtTo || '')} |
+                        </Typography>
+                        <Typography variant='body2'>Orientation: {scheduleDetail.playOrientation || '-'}</Typography>
+                      </Box>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Ads ของ schedule */}
+                <Box sx={{ p: 5, backgroundColor: 'rgb(133 146 163 / 0.1)', borderRadius: 2 }}>
+                  <Typography variant='h6' sx={{ mb: 2 }}>
+                    รายการโฆษณา ({scheduleDetail.adsItems?.length || 0} รายการ)
+                  </Typography>
+                  <div className='grid grid-cols-1 md:grid-cols-2 gap-3'>
+                    {scheduleDetail.adsItems?.map(item => (
+                      <MuiCard
+                        className='w-full'
+                        key={item.id}
+                        onClick={() => onOpenAsset(item)}
+                        sx={{
+                          borderRadius: 3,
+                          boxShadow: 1,
+                          cursor: 'pointer',
+                          borderLeftWidth: '3px',
+                          borderLeftStyle: 'solid',
+                          borderLeftColor:
+                            String(item.type).toLowerCase() === 'video'
+                              ? 'var(--mui-palette-primary-main)'
+                              : 'var(--mui-palette-success-main)',
+                          '&:hover': {
+                            transform: 'translateY(-2px)',
+                            transition: 'all 0.3s ease-in-out',
+                            borderLeftWidth: '3px',
+                            boxShadow: 'var(--mui-customShadows-xl)',
+                            marginBlockEnd: '-1px'
+                          }
+                        }}
+                      >
+                        <CardContent className='flex items-center gap-3'>
+                          <CustomAvatar
+                            skin='light'
+                            color={String(item.type).toLowerCase() === 'video' ? 'primary' : 'success'}
+                            variant='rounded'
+                            size={50}
+                          >
+                            <i
+                              className={String(item.type).toLowerCase() === 'video' ? 'bx bx-video' : 'bx bx-image'}
+                              style={{ fontSize: '24px' }}
+                            />
+                          </CustomAvatar>
+
+                          <div className='flex flex-col flex-1'>
+                            <Typography
+                              variant='subtitle1'
+                              sx={{ fontWeight: 600, lineHeight: 1.2 }}
+                              title={item.title || '(ไม่มีชื่อ)'}
+                            >
+                              {(() => {
+                                const t = item.title || '(ไม่มีชื่อ)'
+                                const a = Array.from(t)
+
+                                return a.length > 50 ? a.slice(0, 50).join('') + '…' : t
+                              })()}
+                            </Typography>
+
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
+                              <Chip
+                                label={String(item.type).toLowerCase()}
+                                size='small'
+                                color={String(item.type).toLowerCase() === 'video' ? 'primary' : 'success'}
+                              />
+                              <Typography variant='caption' color='text.secondary'>
+                                {String(item.duration)}s
+                              </Typography>
+                            </Box>
+
+                            {(item.ad_run_at || item.ad_run_at_to) && (
+                              <Typography variant='caption' color='text.secondary' sx={{ mt: 0.5 }}>
+                                {formatDate(item.ad_run_at || '')} ถึง {formatDate(item.ad_run_at_to || '')}
+                              </Typography>
+                            )}
+                          </div>
+
+                          <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                            <i className='bx bx-chevron-right' style={{ fontSize: '20px', color: '#666' }} />
+                          </Box>
+                        </CardContent>
+                      </MuiCard>
+                    ))}
+                  </div>
+                </Box>
+              </CardContent>
+            </CardContent>
+          ) : (
+            <div style={{ display: 'flex', justifyContent: 'center' }}>
+              <CircularProgress />
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Asset Preview Dialog (ภาพ/วิดีโอ) */}
+      <Dialog open={openAssetDialog} onClose={() => setOpenAssetDialog(false)} maxWidth='md' fullWidth>
+        <Box
+          sx={{
+            mt: 3,
+            mx: 3,
+            mb: 0,
+            display: 'grid',
+            gridTemplateColumns: '48px 1fr 48px',
+            alignItems: 'center'
+          }}
+        >
+          <Button
+            sx={{ borderRadius: '100%', width: 60, height: 60, m: 0, p: 0, justifySelf: 'start' }}
+            onClick={() => setOpenAssetDialog(false)}
+            aria-label='ปิดตัวอย่างสื่อ'
+          >
+            <ArrowBackIcon />
+          </Button>
+          <DialogTitle sx={{ m: 0, textAlign: 'center', justifySelf: 'center' }}>
+            {assetTitle || 'ตัวอย่างสื่อ'}
+          </DialogTitle>
+          <Box sx={{ width: 48, height: 48 }} />
+        </Box>
+
+        <DialogContent sx={{ mt: 1, py: 0, minHeight: { xs: '60vh', md: 550 } }}>
+          {assetLoading && (
+            <div style={{ display: 'flex', justifyContent: 'center' }}>
+              <CircularProgress />
+            </div>
+          )}
+          {assetError && <Alert severity='error'>{assetError}</Alert>}
+
+          {!assetLoading && !assetError && assetSrc && assetType === 'image' && (
+            <Box sx={{ width: '100%', display: 'flex', justifyContent: 'center' }}>
+              <CardContent sx={{ p: 0, width: '100%' }}>
+                <img
+                  src={assetSrc}
+                  alt={assetTitle || 'image'}
+                  style={{ maxHeight: 500, objectFit: 'contain', borderRadius: 8, width: '100%' }}
+                />
+              </CardContent>
+            </Box>
+          )}
+          {!assetLoading && !assetError && assetSrc && assetType === 'video' && (
+            <video controls width='100%' style={{ maxHeight: 480 }} autoPlay>
+              <source src={assetSrc} type='video/mp4' />
+              Your browser does not support the video tag.
+            </video>
+          )}
+        </DialogContent>
       </Dialog>
 
       {/* Edit Dialog */}
@@ -998,7 +1354,7 @@ const DataTable: React.FC = () => {
         open={toast.open}
         autoHideDuration={3000}
         onClose={() => setToast((t: typeof toast) => ({ ...t, open: false }))}
-        anchorOrigin={{ vertical: 'top', horizontal: 'right' }}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
       >
         <Alert
           onClose={() => setToast((t: typeof toast) => ({ ...t, open: false }))}

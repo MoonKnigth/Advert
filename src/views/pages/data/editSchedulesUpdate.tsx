@@ -584,7 +584,7 @@ const EditSchedulesUpdate = ({
               <Box display='flex' alignItems='center' flexDirection='column'>
                 <Box display='flex' flexDirection='column' sx={{ width: '80%' }}>
                   <Typography display='flex' variant='h3'>
-                    {adName || 'ไม่ได้ระบุชื่อ'}
+                    {adName || 'ยังไม่ได้ระบุชื่อ'}
                   </Typography>
                   {/* <Typography variant='h6' color='secondary'>
                     {adDescription || 'ไม่มีคำอธิบาย'}
@@ -668,10 +668,12 @@ const EditSchedulesUpdate = ({
 
         <Grid size={{ xs: 12 }}>
           {/* วิดีโอ */}
-          <Box display='flex' alignItems='center' mb={2} gap={1}>
-            <Icon icon='mdi:play-box' color='red' width={24} />
-            <Typography variant='h6'>ไฟล์วิดีโอ ({allVideos.length} รายการ)</Typography>
-          </Box>
+          {allVideos.length > 0 && (
+            <Box display='flex' alignItems='center' mb={2} gap={1}>
+              <Icon icon='mdi:play-box' color='red' width={24} />
+              <Typography variant='h6'>ไฟล์วิดีโอ ({allVideos.length} รายการ)</Typography>
+            </Box>
+          )}
 
           <Grid container spacing={2}>
             {/* {uploadedVideos.map((video, index) => (
@@ -758,11 +760,11 @@ const EditSchedulesUpdate = ({
               </Grid>
             ))}
           </Grid>
-
+          {allVideos.length > 0 && allImages.length > 0 && (
+            <Divider sx={{ my: 5, height: 2, backgroundColor: '#ccc', borderRadius: 1 }} />
+          )}
           {allImages.length > 0 && (
             <>
-              <Divider sx={{ my: 5, height: 2, backgroundColor: '#ccc', borderRadius: 1 }} />
-
               {/* รูปภาพ */}
               <Box display='flex' alignItems='center' mb={2} gap={1}>
                 <Icon icon='mdi:image' color='red' width={24} />

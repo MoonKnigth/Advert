@@ -285,13 +285,14 @@ const Register = () => {
 
               {/* PASSWORD */}
               <CustomTextField
+                label='Password'
+                value={values.password}
+                id='password'
+                onChange={handleChange('password')}
+                type={isPasswordShown ? 'text' : 'password'}
                 fullWidth
                 name='password'
-                label='Password'
                 placeholder='············'
-                type={isPasswordShown ? 'text' : 'password'}
-                value={values.password}
-                onChange={handleChange('password')}
                 onBlur={handleBlur('password')}
                 error={Boolean(errors.password)}
                 helperText={errors.password}

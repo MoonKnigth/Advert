@@ -583,10 +583,11 @@ const EditSchedulesUpdate = ({
             <Container>
               <Box display='flex' alignItems='center' flexDirection='column'>
                 <Box display='flex' flexDirection='column' sx={{ width: '80%' }}>
-                  <Typography display='flex' variant='h3'>
+                  <Typography display='flex' variant='h3' sx={{ wordBreak: 'break-word', whiteSpace: 'normal' }}>
+                    {' '}
                     {adName || 'ยังไม่ได้ระบุชื่อ'}
                   </Typography>
-                  {/* <Typography variant='h6' color='secondary'>
+                  {/* <Typography variant='h6' color='seco ndary'>
                     {adDescription || 'ไม่มีคำอธิบาย'}
                   </Typography> */}
 

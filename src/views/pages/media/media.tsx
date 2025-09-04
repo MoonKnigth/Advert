@@ -170,6 +170,12 @@ export default function MediaPage() {
   // ===== new states =====
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [confirmIds, setConfirmIds] = useState<number[]>([])
+  const [dirty, setDirty] = useState(false)
+
+  // ทุกครั้งที่เปิด dialog สำหรับรายการใหม่ รีเซ็ต dirty
+  useEffect(() => {
+    if (editOpen) setDirty(false)
+  }, [editOpen, editMedia])
 
   // ถ้ามีแท็บ Videos/Images และอยากกรองที่ฝั่ง server:
   // '1' = video, '2' = image (ตามโค้ดเดิมของคุณ)
@@ -424,21 +430,25 @@ export default function MediaPage() {
     setEditMedia(null)
   }
 
-  // อนุญาต: ตัวอักษรทุกภาษา, ตัวเลข, เครื่องหมายกำกับเสียง (combining marks), และ เว้นวรรค _ -
-  const NAME_ALLOWED_RE = /^[\p{L}\p{N}\p{M} _-]+$/u
+  // ทุกครั้งที่เปิด dialog สำหรับรายการใหม่ รีเซ็ต dirty
+  useEffect(() => {
+    if (editOpen) setDirty(false)
+  }, [editOpen, editMedia])
 
-  // ✅ optimistic + partial payload + timeout + rollback
-  const handleEditSave = async () => {
+  // ---------- ปรับ handleEditSave ให้รับค่าแทนการอ่านจาก state ----------
+  const handleEditSave = async (title: string, description: string) => {
     if (!editMedia) return
 
-    // ===== NEW: ตรวจชื่อก่อน =====
-    const name = editTitle.trim()
+    const name = title.trim()
 
     if (!name) {
       setToast({ open: true, msg: 'กรุณากรอกชื่อโฆษณา/ชื่อไฟล์', sev: 'warning' })
 
       return
     }
+
+    // อนุญาตเฉพาะตัวอักษรทุกภาษา/ตัวเลข/เว้นวรรค/_/-
+    const NAME_ALLOWED_RE = /^[\p{L}\p{N}\p{M} _-]+$/u
 
     if (!NAME_ALLOWED_RE.test(name)) {
       setToast({
@@ -450,12 +460,12 @@ export default function MediaPage() {
       return
     }
 
-    // partial payload เฉพาะ field ที่เปลี่ยน
     const payload: Partial<Pick<MediaItem, 'title' | 'description'>> = {}
 
     if (name !== (editMedia.title ?? '')) payload.title = name
-    if (editDescription !== (editMedia.description ?? '')) payload.description = editDescription
+    if (description !== (editMedia.description ?? '')) payload.description = description
 
+    // ไม่มีอะไรเปลี่ยน แค่ปิด dialog
     if (!Object.keys(payload).length) {
       setEditOpen(false)
 
@@ -463,10 +473,9 @@ export default function MediaPage() {
     }
 
     const accessToken = Cookies.get('accessToken')
-
-    // ===== (ต่อด้วยโค้ดเดิมของคุณ: optimistic update, fetch PUT, toast success/error) =====
     const previous = media
 
+    // optimistic update
     startTransition(() => {
       setMedia(prev => prev.map(m => (m.id === editMedia.id ? { ...m, ...payload } : m)))
     })
@@ -492,6 +501,7 @@ export default function MediaPage() {
       const json = await res.json().catch(() => ({}))
 
       if (!res.ok || json?.success === false) throw new Error(json?.message || 'Update failed')
+
       setToast({ open: true, msg: 'Updated successfully', sev: 'success' })
     } catch (e: any) {
       clearTimeout(t)
@@ -546,9 +556,6 @@ export default function MediaPage() {
       setDeleting(false)
     }
   }
-
-  const isUnchanged =
-    !!editMedia && editTitle === (editMedia.title || '') && editDescription === (editMedia.description || '')
 
   if (loading) {
     return (
@@ -1019,29 +1026,28 @@ export default function MediaPage() {
         </Modal>
 
         {/* Edit Dialog */}
-        <Dialog
-          open={editOpen}
-          onClose={handleEditClose}
-          closeAfterTransition={false}
-          sx={{ '& .MuiDialog-paper': { overflow: 'visible' } }}
-          fullWidth
-          maxWidth='sm'
-        >
+        <Dialog open={editOpen} onClose={handleEditClose} fullWidth maxWidth='sm'>
           <DialogCloseButton onClick={handleEditClose} disableRipple>
             <i className='bx-x' />
           </DialogCloseButton>
 
           <DialogTitle variant='h4' className='flex flex-col gap-2 text-center p-6 sm:pbs-16 sm:pbe-6 sm:pli-16'>
             Edit Media
-            {/* <Typography component='span' className='flex flex-col text-center'>
-              Edit data
-            </Typography> */}
           </DialogTitle>
 
+          {/* ใช้ key เพื่อรีเมาท์ฟอร์มเมื่อเปลี่ยนรายการ/เปิดใหม่ => defaultValue ถูกใช้จริง */}
           <form
+            key={editMedia?.id ?? 'new'}
             onSubmit={e => {
               e.preventDefault()
-              handleEditSave()
+              const fd = new FormData(e.currentTarget)
+              const title = String(fd.get('title') ?? '')
+              const description = String(fd.get('description') ?? '')
+
+              handleEditSave(title, description)
+            }}
+            onInput={() => {
+              if (!dirty) setDirty(true)
             }}
           >
             <DialogContent className='overflow-visible pbs-0 p-6 sm:pli-16'>
@@ -1060,28 +1066,28 @@ export default function MediaPage() {
                     fullWidth
                     autoComplete='off'
                     label='Title'
-                    value={editTitle}
-                    onChange={e => setEditTitle(e.target.value)}
+                    name='title'
+                    defaultValue={editTitle}
                     variant='standard'
                   />
                 </Grid>
+
                 <Grid item xs={12}>
                   <CustomTextField
                     fullWidth
-                    autoComplete='off'
-                    label='Description'
-                    value={editDescription}
-                    onChange={e => setEditDescription(e.target.value)}
-                    variant='standard'
+                    rows={4}
                     multiline
-                    minRows={3}
+                    label='Description'
+                    name='description'
+                    defaultValue={editDescription}
+                    variant='standard'
                   />
                 </Grid>
               </Grid>
             </DialogContent>
 
             <DialogActions className='justify-center pbs-0 p-6 sm:pbe-16 sm:pli-16'>
-              <Button variant='contained' type='submit' disabled={isSaving || !!isUnchanged}>
+              <Button variant='contained' type='submit' disabled={isSaving || !dirty}>
                 {isSaving ? 'Saving...' : 'Save'}
               </Button>
               <Button variant='tonal' type='button' color='secondary' onClick={handleEditClose}>

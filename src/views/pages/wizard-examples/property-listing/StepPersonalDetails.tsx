@@ -361,6 +361,7 @@ const DeviceDialog = memo(function DeviceDialog({
   const [openConfirmRevoke, setOpenConfirmRevoke] = useState(false)
   const [openConfirmDelete, setOpenConfirmDelete] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const nameRef = useRef<HTMLInputElement | HTMLTextAreaElement>(null)
 
   // ยืนยันลบ "กำหนดการ"
   const [openConfirmSchedule, setOpenConfirmSchedule] = useState(false)
@@ -417,7 +418,7 @@ const DeviceDialog = memo(function DeviceDialog({
     } finally {
       setRevoking(false)
       setOpenConfirmRevoke(false)
-      handleClose() // ปิดเมนู 3 จุด
+      handleClose()
     }
   }
 
@@ -541,7 +542,7 @@ const DeviceDialog = memo(function DeviceDialog({
             </div>
           </CardContent>
           <Box>
-            <Chip label='กำหนดการวันนี้และที่กำลังจะมาถึง' color='secondary' variant='filled' />
+            <Chip label='กำหนดการวันนี้และที่กำลังจะมาถึง' color='secondary' variant='filled' sx={{ mr: 2 }} />
             <IconButton aria-label='more' aria-controls='long-menu' aria-haspopup='true' onClick={handleClick}>
               <i className='bx-dots-vertical-rounded' />
             </IconButton>
@@ -561,7 +562,12 @@ const DeviceDialog = memo(function DeviceDialog({
                 horizontal: 'center'
               }}
             >
-              <MenuItem onClick={() => setOpenEditDevice(true)}>
+              <MenuItem
+                onClick={() => {
+                  handleClose()
+                  setOpenEditDevice(true)
+                }}
+              >
                 <ListItemIcon>
                   <i className='bx bx-edit' />
                 </ListItemIcon>
@@ -620,15 +626,15 @@ const DeviceDialog = memo(function DeviceDialog({
           {/* Confirm Revoke */}
           <Dialog open={openConfirmRevoke} onClose={() => setOpenConfirmRevoke(false)} maxWidth='xs' fullWidth>
             <DialogTitle>ยืนยันการออกจากระบบอุปกรณ์ ID: {selectedDevice?.device_id}</DialogTitle>
-            <DialogContent>
-              <Alert severity='warning' variant='outlined' sx={{ mb: 2 }}>
+            {/* <DialogContent> */}
+            {/* <Alert severity='warning' variant='outlined' sx={{ mb: 2 }}>
                 ต้องการออกจากระบบของอุปกรณ์นี้จริง ๆ ใช่ไหม?{' '}
-              </Alert>
-              {/* <Typography>ต้องการออกจากระบบของอุปกรณ์นี้จริง ๆ ใช่ไหม?</Typography> */}
-              {/* <Typography variant='body2' color='text.secondary' sx={{ mt: 1 }}>
+              </Alert> */}
+            {/* <Typography>ต้องการออกจากระบบของอุปกรณ์นี้จริง ๆ ใช่ไหม?</Typography> */}
+            {/* <Typography variant='body2' color='text.secondary' sx={{ mt: 1 }}>
                 ID: {selectedDevice?.device_id}
               </Typography> */}
-            </DialogContent>
+            {/* </DialogContent> */}
             <DialogActions>
               <Button onClick={() => setOpenConfirmRevoke(false)} disabled={revoking}>
                 ยกเลิก
@@ -661,21 +667,40 @@ const DeviceDialog = memo(function DeviceDialog({
                 onClick={handleDeleteDevice}
                 disabled={deleting || selectedDevice?.revoked === false}
               >
-                {deleting ? 'กำลังลบ…' : 'ลบเลย'}
+                {deleting ? 'กำลังลบ…' : 'ลบ'}
               </Button>
             </DialogActions>
           </Dialog>
 
           {/* Dialog แก้ไขข้อมูลอุปกรณ์ */}
-          <Dialog open={openEditDevice} onClose={() => setOpenEditDevice(false)} maxWidth='sm' fullWidth>
+          <Dialog
+            open={openEditDevice}
+            onClose={() => setOpenEditDevice(false)}
+            maxWidth='sm'
+            fullWidth
+            TransitionProps={{
+              onEntered: () => {
+                const el = nameRef.current
+
+                if (el) {
+                  el.focus()
+                  const len = el.value.length ?? 0
+
+                  el.setSelectionRange(len, len)
+                }
+              }
+            }}
+          >
             <DialogTitle>แก้ไขข้อมูลอุปกรณ์</DialogTitle>
             <DialogContent dividers>
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3, mt: 1 }}>
                 <CustomTextField
+                  autoFocus
                   fullWidth
                   label='ชื่ออุปกรณ์'
                   value={editName}
                   onChange={e => setEditName(e.target.value)}
+                  inputRef={nameRef}
                 />
                 <CustomTextField
                   fullWidth
@@ -689,7 +714,7 @@ const DeviceDialog = memo(function DeviceDialog({
                   value={editDescription}
                   onChange={e => setEditDescription(e.target.value)}
                   multiline
-                  rows={3}
+                  rows={4}
                 />
 
                 {saveError && (
@@ -699,7 +724,12 @@ const DeviceDialog = memo(function DeviceDialog({
                 )}
               </Box>
               <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 5, mt: 3 }}>
-                <Button onClick={() => setOpenEditDevice(false)} disabled={saving}>
+                <Button
+                  onClick={() => {
+                    setOpenEditDevice(false)
+                  }}
+                  disabled={saving}
+                >
                   ยกเลิก
                 </Button>
                 <Button variant='contained' onClick={handleSave} disabled={!canSave}>
@@ -1458,6 +1488,7 @@ const StepPersonalDetails = ({
   }
 
   // สแกน on-demand ทุกหน้า ทั้ง video และ image เพื่อหา media ที่ตรงกับ adsItem
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   async function findMediaOnDemand(item: AdsItem): Promise<{ media?: MediaItem; matchedBy?: string }> {
     const token = Cookies.get('accessToken')
 
@@ -1580,7 +1611,7 @@ const StepPersonalDetails = ({
         setAssetLoading(false)
       }
     },
-    [resolveMediaForItem]
+    [findMediaOnDemand, resolveMediaForItem]
   )
 
   // ⬇️ ประกาศ Hook ให้ครบก่อน

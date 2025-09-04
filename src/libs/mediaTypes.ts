@@ -24,6 +24,8 @@ export type EditSchedulesContentNextPayload = {
 
     // payload จากหน้าที่ “เลือกสื่อ” (child → wrapper)
     selectedOldFiles?: MediaItem[]
+    adName?: string; // ✅ เพิ่มฟิลด์นี้
+
 }
 
 export type EditSchedulesSubmitPayload = {

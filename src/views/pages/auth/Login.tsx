@@ -138,9 +138,10 @@ const Login = () => {
           </div>
           <form onSubmit={handleLogin} className='flex flex-col gap-5' autoComplete='on'>
             <TextField
+              autoFocus
               fullWidth
-              label='Email or Username'
               value={email}
+              label='Email or Username'
               onChange={e => setEmail(e.target.value)}
               placeholder={email ? '' : 'Enter your email or username'}
               required

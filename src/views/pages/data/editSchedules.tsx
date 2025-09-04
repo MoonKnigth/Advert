@@ -2,7 +2,6 @@
 
 'use client'
 
-import type { ChangeEvent } from 'react'
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 
 import dynamic from 'next/dynamic'
@@ -249,6 +248,12 @@ const EditSchedulesContent = ({
   const mediaCacheRef = useRef<Map<number, MediaItem>>(new Map())
   const mediaMetaRef = useRef<Map<number, MediaIndexEntry>>(new Map())
   const isScanningRef = useRef(false)
+  const adNameRef = useRef<HTMLInputElement>(null)
+
+  // sync เมื่อ prop adName เปลี่ยน (เช่นตอนย้อนกลับจาก step 2)
+  useEffect(() => {
+    if (adNameRef.current) adNameRef.current.value = adName || ''
+  }, [adName])
 
   // แจ้งเตือนแบบล่างขวา (snackbar) + แบนเนอร์บนฟอร์ม
   const [snack, setSnack] = useState<{ open: boolean; msg: string; sev: 'success' | 'error' | 'warning' | 'info' }>({
@@ -387,7 +392,6 @@ const EditSchedulesContent = ({
     fetchStorageUsage()
   }, [fetchStorageUsage])
 
-  // ใน EditSchedulesContent (child)
   useEffect(() => {
     // เปิดและยิงโหลดคลังสื่อทันทีรอบแรก
     // handleOldFilesClick จะ toggle + fetch ให้เอง
@@ -581,7 +585,7 @@ const EditSchedulesContent = ({
   )
 
   // ===== Ad name/desc =====
-  const handleAdNameChange = (e: ChangeEvent<HTMLInputElement>) => setAdName(e.target.value)
+  // const handleAdNameChange = (e: ChangeEvent<HTMLInputElement>) => setAdName(e.target.value)
 
   // ===== Inline rename =====
 
@@ -590,6 +594,8 @@ const EditSchedulesContent = ({
   const NAME_ALLOWED_RE = /^[\p{L}\p{N}\p{M} _-]+$/u
 
   const handleNextWithValidation = () => {
+    const nextName = adNameRef.current?.value?.trim() ?? ''
+
     // วันที่
     if (!startAt || !endAt) {
       const msg = 'กรุณาเลือกวันที่เริ่มต้นและวันที่สิ้นสุด'
@@ -620,7 +626,7 @@ const EditSchedulesContent = ({
     }
 
     // ชื่อ
-    if (!adName.trim()) {
+    if (!nextName) {
       const msg = 'กรุณากรอกชื่อกำหนดการ'
 
       setFormError(msg)
@@ -629,8 +635,8 @@ const EditSchedulesContent = ({
       return
     }
 
-    // อนุญาตทุกภาษา ยกเว้นสัญลักษณ์ (ยกเว้น เว้นวรรค, _, -)
-    if (!NAME_ALLOWED_RE.test(adName.trim())) {
+    // อนุญาตเฉพาะตัวอักษร/ตัวเลข/ช่องว่าง/_/-
+    if (!NAME_ALLOWED_RE.test(nextName)) {
       const msg = 'ชื่อกำหนดการฯ อนุญาตเฉพาะตัวอักษรทุกภาษา/ตัวเลข และสัญลักษณ์: เว้นวรรค, _ , -'
 
       setFormError(msg)
@@ -644,7 +650,11 @@ const EditSchedulesContent = ({
 
     const selectedOldFiles = selected.map(id => mediaCacheRef.current.get(id)).filter(Boolean) as MediaItem[]
 
-    onNext?.({ selectedOldFiles })
+    // ✅ กัน “ลืม” — sync state ไว้ให้ด้วย
+    setAdName(nextName)
+
+    // ✅ สำคัญ: ส่ง adName ใหม่ไปกับ payload ทันที
+    onNext?.({ selectedOldFiles, adName: nextName })
   }
 
   // เรียงไฟล์: อันที่ถูกเลือก (checkbox true) มาก่อน แล้วค่อยเรียงชื่อ
@@ -942,8 +952,8 @@ const EditSchedulesContent = ({
           fullWidth
           label='ชื่อ'
           placeholder='ตั้งชื่อตามต้องการ'
-          value={adName}
-          onChange={handleAdNameChange}
+          defaultValue={adName} // ✅ ใช้ defaultValue
+          inputRef={adNameRef} // ✅ ผูก ref
         />
       </Grid>
 
@@ -1039,13 +1049,14 @@ export function EditSchedules({ row, onNext, initialPayload }: EditSchedulesProp
 
   const handleNext = (payloadFromChild?: EditSchedulesContentNextPayload) => {
     const selectedOldFiles = payloadFromChild?.selectedOldFiles ?? oldFiles.filter(f => selected.includes(f.id))
+    const finalAdName = payloadFromChild?.adName ?? adName // ← ใช้ adName ล่าสุด
 
     onNext?.({
       scheduleId: row?.schedule_id ?? 0,
       orientation,
       selectedOldFiles,
       uploadedFiles,
-      adName,
+      adName: finalAdName,
       adDescription,
       startAt,
       endAt

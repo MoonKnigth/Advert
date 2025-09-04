@@ -56,6 +56,8 @@ interface UploadedFile {
   comments?: string
 }
 
+type InputOrTA = HTMLInputElement | HTMLTextAreaElement
+
 type Props = {
   activeStep: number
   handleNext: () => void
@@ -250,6 +252,8 @@ const StepPropertyDetails = ({
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const mediaCacheRef = useRef<Map<number, MediaItem>>(new Map())
+  const adNameRef = useRef<InputOrTA>(null)
+  const adDescRef = useRef<InputOrTA>(null)
   const cloud = 'https://cloud.softacular.net'
 
   // Storage usage
@@ -574,7 +578,7 @@ const StepPropertyDetails = ({
 
   // ===== Ad name/desc =====
   // const handleAdNameChange = (e: ChangeEvent<HTMLInputElement>) => setAdName(e.target.value)
-  const handleAdDescriptionChange = (e: ChangeEvent<HTMLInputElement>) => setAdDescription(e.target.value)
+  // const handleAdDescriptionChange = (e: ChangeEvent<HTMLInputElement>) => setAdDescription(e.target.value)
 
   // ===== Inline rename =====
   const handleEditClick = (index: number) => {
@@ -582,7 +586,7 @@ const StepPropertyDetails = ({
     setNewFileName(uploadedFiles[index].name)
   }
 
-  // อนุญาต: ตัวอักษรทุกภาษา (L), ตัวเลข (N), เครื่องหมายประกอบ (M), เว้นวรรค, _, -
+  // helper เดิมของคุณ
   const sanitizeName = (s: string) =>
     s
       .normalize('NFC')
@@ -590,36 +594,45 @@ const StepPropertyDetails = ({
       .replace(/\s+/g, ' ')
       .trim()
 
-  const isAllowedChunk = (s: string) => /^[\p{L}\p{N}\p{M} _-]+$/u.test(s)
+  useEffect(() => {
+    if (adNameRef.current) adNameRef.current.value = adName || ''
+  }, [adName])
 
-  // ก่อนพิมพ์: บล็อกอักขระที่ไม่อนุญาต
-  const handleNameBeforeInput = (e: React.FormEvent<HTMLInputElement>) => {
-    const data = (e.nativeEvent as InputEvent).data
+  useEffect(() => {
+    if (adDescRef.current) adDescRef.current.value = adDescription || ''
+  }, [adDescription])
+  const allowedOneChar = /[\p{L}\p{N}\p{M} _-]/u
 
-    if (!data) return
+  const handleBeforeInput: React.InputEventHandler<InputOrTA> = e => {
+    const { data } = e
 
-    if (!isAllowedChunk(data)) {
-      e.preventDefault()
-      showTopAlert('อนุญาตเฉพาะตัวอักษรทุกภาษา/ตัวเลข และสัญลักษณ์: เว้นวรรค, _ , -', 'warning')
+    // ตรวจทุกตัวอักษร (เผื่อ paste ได้หลายตัว)
+    for (const ch of data) {
+      if (!allowedOneChar.test(ch)) {
+        e.preventDefault()
+
+        // TODO: แจ้งเตือนผู้ใช้ถ้าต้องการ
+        return
+      }
     }
   }
 
   // ตอนเปลี่ยนค่า: sanitize ถ้ามีตัวที่ไม่อนุญาต (แทน alert เดิม)
-  const handleAdNameChange = (e: ChangeEvent<HTMLInputElement>) => {
-    const raw = e.target.value
-    const clean = sanitizeName(raw)
+  // const handleAdNameChange = (e: ChangeEvent<HTMLInputElement>) => {
+  //   const raw = e.target.value
+  //   const clean = sanitizeName(raw)
 
-    if (raw !== clean) {
-      showTopAlert('ลบอักขระที่ไม่อนุญาตออกให้อัตโนมัติ', 'info')
-    }
+  //   if (raw !== clean) {
+  //     showTopAlert('ลบอักขระที่ไม่อนุญาตออกให้อัตโนมัติ', 'info')
+  //   }
 
-    setAdName(clean)
-  }
+  //   setAdName(clean)
+  // }
 
   // เก็บงานหลังพิมพ์เสร็จ (เช่นมีช่องว่างเกิน) — optional
-  const handleAdNameBlur = () => {
-    setAdName(prev => sanitizeName(prev))
-  }
+  // const handleAdNameBlur = () => {
+  //   setAdName(prev => sanitizeName(prev))
+  // }
 
   const handleSave = () => {
     if (editingIndex === null) return
@@ -661,15 +674,25 @@ const StepPropertyDetails = ({
   }
 
   const handleNextWithValidation = () => {
+    // 1) อ่านค่าจาก input ที่ไม่ถูกควบคุม
+    const rawName = adNameRef.current?.value ?? ''
+    const rawDesc = adDescRef.current?.value ?? ''
+
+    // 2) ทำความสะอาดชื่อ
+    const name = sanitizeName(rawName)
+
+    if (adNameRef.current) adNameRef.current.value = name // ให้ UI ตรงกับผล sanitize
+
+    // 3) sync กลับไปยัง state ที่ต้องส่งต่อ (กันลืม setAdName / setAdDescription)
+    setAdName(name)
+    setAdDescription(rawDesc.trim())
+
+    // 4) ตรวจสอบเงื่อนไขเดิม ๆ
     const msgs: string[] = []
 
-    // 1) ต้องมีไฟล์อย่างน้อย 1 (จากคลังหรืออัปโหลด)
     if (uploadedFiles.length === 0 && selected.length === 0) {
       msgs.push('กรุณาเลือกไฟล์อย่างน้อย 1 ไฟล์ (จากคลังหรืออัปโหลด)')
     }
-
-    // 2) ชื่อกำหนดการโฆษณา
-    const name = adName.trim()
 
     if (!name) {
       msgs.push('กรุณากรอกชื่อกำหนดการโฆษณา')
@@ -683,6 +706,7 @@ const StepPropertyDetails = ({
       return
     }
 
+    // 5) ผ่านทั้งหมด → ไปต่อ
     handleNext()
   }
 
@@ -1107,10 +1131,18 @@ const StepPropertyDetails = ({
           fullWidth
           label='ชื่อ'
           placeholder='ตั้งชื่อตามต้องการ'
-          value={adName}
-          onChange={handleAdNameChange}
-          onBeforeInput={handleNameBeforeInput}
-          onBlur={handleAdNameBlur}
+          defaultValue={adName} // ✅ ใช้ defaultValue
+          inputRef={adNameRef} // ✅ เก็บ DOM ref
+          inputProps={{ onBeforeInput: handleBeforeInput }} // ✅ กันอักษรต้องห้ามระหว่างพิมพ์
+          onBlur={() => {
+            // sanitize ที่ตัว input โดยไม่ต้อง setState เพื่อลื่นสุด
+            const v = sanitizeName(adNameRef.current?.value || '')
+
+            if (adNameRef.current) adNameRef.current.value = v
+
+            // ถ้าต้องการให้ state ด้านข้าง (เช่น preview card) อัปเดตตอน blur ด้วย ก็ปลดคอมเมนต์บรรทัดล่าง
+            // setAdName(v)
+          }}
         />
       </Grid>
 
@@ -1121,8 +1153,9 @@ const StepPropertyDetails = ({
           minRows={2}
           label='คำอธิบาย'
           placeholder='ไม่บังคับ'
-          value={adDescription}
-          onChange={handleAdDescriptionChange}
+          defaultValue={adDescription} // ✅ ใช้ defaultValue
+          inputRef={adDescRef} // ✅ เก็บ DOM ref (textarea)
+          // ไม่ต้อง onChange เพื่อเลี่ยง re-render ทุกคีย์
         />
       </Grid>
 
